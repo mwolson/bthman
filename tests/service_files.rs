@@ -1,3 +1,4 @@
+use bthman::service;
 use bthman::service_files::{OPENRC_SYSTEM, OPENRC_USER, SYSTEMD_UNIT};
 
 #[test]
@@ -42,4 +43,21 @@ fn openrc_uses_supervise_daemon() {
 fn openrc_defines_command() {
     assert!(OPENRC_USER.contains("command="));
     assert!(OPENRC_SYSTEM.contains("command="));
+}
+
+#[test]
+fn render_template_substitutes_placeholder_with_current_exe() {
+    let exe = std::env::current_exe().unwrap();
+    let exe_str = exe.to_str().unwrap();
+
+    let rendered = service::render_template(SYSTEMD_UNIT, "%h/.local/bin/bthman").unwrap();
+    assert!(!rendered.contains("%h/.local/bin/bthman"));
+    assert!(rendered.contains(exe_str));
+
+    let rendered = service::render_template(OPENRC_USER, "$HOME/.local/bin/bthman").unwrap();
+    assert!(!rendered.contains("$HOME/.local/bin/bthman"));
+    assert!(rendered.contains(exe_str));
+
+    let rendered = service::render_template(OPENRC_SYSTEM, "/usr/local/bin/bthman").unwrap();
+    assert!(rendered.contains(exe_str));
 }

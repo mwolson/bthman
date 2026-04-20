@@ -15,8 +15,8 @@ pub fn install() -> Result<()> {
     let unit_dir = user_unit_dir()?;
     fs::create_dir_all(&unit_dir).with_context(|| format!("creating {}", unit_dir.display()))?;
     let unit_path = unit_dir.join("bthman.service");
-    fs::write(&unit_path, service_files::SYSTEMD_UNIT)
-        .with_context(|| format!("writing {}", unit_path.display()))?;
+    let unit = service::render_template(service_files::SYSTEMD_UNIT, "%h/.local/bin/bthman")?;
+    fs::write(&unit_path, unit).with_context(|| format!("writing {}", unit_path.display()))?;
     info!("Wrote {}", unit_path.display());
     run(&["systemctl", "--user", "daemon-reload"])?;
     run(&["systemctl", "--user", "enable", "bthman.service"])?;

@@ -15,8 +15,8 @@ pub fn install() -> Result<()> {
     if !service::is_root() {
         bail!("OpenRC system install must be run as root");
     }
-    fs::write(INIT_PATH, service_files::OPENRC_SYSTEM)
-        .with_context(|| format!("writing {}", INIT_PATH))?;
+    let script = service::render_template(service_files::OPENRC_SYSTEM, "/usr/local/bin/bthman")?;
+    fs::write(INIT_PATH, script).with_context(|| format!("writing {}", INIT_PATH))?;
     let mut perms = fs::metadata(INIT_PATH)?.permissions();
     perms.set_mode(0o755);
     fs::set_permissions(INIT_PATH, perms)?;

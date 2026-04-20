@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 
 use crate::deps;
 
@@ -58,6 +58,14 @@ pub fn effective_uid() -> Option<u32> {
 
 pub fn is_root() -> bool {
     effective_uid() == Some(0)
+}
+
+pub fn render_template(template: &str, placeholder: &str) -> Result<String> {
+    let exe = std::env::current_exe().context("getting current exe path")?;
+    let exe_str = exe
+        .to_str()
+        .context("current exe path is not valid UTF-8")?;
+    Ok(template.replace(placeholder, exe_str))
 }
 
 fn openrc_supports_user() -> bool {

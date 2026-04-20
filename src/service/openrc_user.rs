@@ -16,8 +16,8 @@ pub fn install() -> Result<()> {
     let init_dir = user_init_dir()?;
     fs::create_dir_all(&init_dir).with_context(|| format!("creating {}", init_dir.display()))?;
     let init_path = init_dir.join("bthman");
-    fs::write(&init_path, service_files::OPENRC_USER)
-        .with_context(|| format!("writing {}", init_path.display()))?;
+    let script = service::render_template(service_files::OPENRC_USER, "$HOME/.local/bin/bthman")?;
+    fs::write(&init_path, script).with_context(|| format!("writing {}", init_path.display()))?;
     let mut perms = fs::metadata(&init_path)?.permissions();
     perms.set_mode(0o755);
     fs::set_permissions(&init_path, perms)?;
