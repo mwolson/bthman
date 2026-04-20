@@ -1,0 +1,37 @@
+[package]
+name = "bthman"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT"
+authors = ["Michael Olson <c@mwolson.org>"]
+description = "Bluetooth HFP profile manager with suspend/resume reconnect for PipeWire + WirePlumber"
+repository = "https://github.com/mwolson/bthman"
+readme = "README.md"
+keywords = ["bluetooth", "hfp", "pipewire", "pulseaudio", "daemon"]
+categories = ["command-line-utilities", "multimedia::audio"]
+
+[[bin]]
+name = "bthman"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+crossbeam-channel = "0.5"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+signal-hook = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+assert_cmd = "2"
+tempfile = "3"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+panic = "abort"
+strip = true

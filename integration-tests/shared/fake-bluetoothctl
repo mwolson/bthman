@@ -1,0 +1,49 @@
+#!/bin/bash
+set -euo pipefail
+
+SENTINEL_DIR="${BTHMAN_TEST_SENTINEL:-/tmp/bthman-test}"
+mkdir -p "$SENTINEL_DIR"
+printf '%s\n' "$*" >> "$SENTINEL_DIR/bluetoothctl-calls.log"
+
+AUDIO_ADDR="AA:BB:CC:DD:EE:FF"
+NON_AUDIO_ADDR="11:22:33:44:55:66"
+
+case "$1" in
+    devices)
+        if [[ "${2:-}" == "Paired" ]]; then
+            echo "Device $AUDIO_ADDR Fake Headset"
+            echo "Device $NON_AUDIO_ADDR Fake Mouse"
+        fi
+        ;;
+    info)
+        case "${2:-}" in
+            "$AUDIO_ADDR")
+                cat << EOF
+Device $AUDIO_ADDR (public)
+	Name: Fake Headset
+	Paired: yes
+	Trusted: yes
+	Connected: yes
+	UUID: Audio Sink                (0000110b-0000-1000-8000-00805f9b34fb)
+	UUID: Headset                   (00001108-0000-1000-8000-00805f9b34fb)
+	UUID: Hands-Free                (0000111e-0000-1000-8000-00805f9b34fb)
+EOF
+                ;;
+            "$NON_AUDIO_ADDR")
+                cat << EOF
+Device $NON_AUDIO_ADDR (public)
+	Name: Fake Mouse
+	Paired: yes
+	Trusted: yes
+	Connected: yes
+	UUID: Human Interface Device    (00001124-0000-1000-8000-00805f9b34fb)
+EOF
+                ;;
+        esac
+        ;;
+    connect)
+        printf '%s\n' "$*" >> "$SENTINEL_DIR/bluetoothctl-connect.log"
+        echo "Attempting to connect to $2"
+        echo "Connection successful"
+        ;;
+esac

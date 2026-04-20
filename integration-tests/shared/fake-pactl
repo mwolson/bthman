@@ -1,0 +1,76 @@
+#!/bin/bash
+set -euo pipefail
+
+SENTINEL_DIR="${BTHMAN_TEST_SENTINEL:-/tmp/bthman-test}"
+mkdir -p "$SENTINEL_DIR"
+printf '%s\n' "$*" >> "$SENTINEL_DIR/pactl-calls.log"
+
+case "$1" in
+    list)
+        case "${2:-}" in
+            cards)
+                if [[ "${3:-}" == "short" ]]; then
+                    printf "42\tbluez_card.AA_BB_CC_DD_EE_FF\tmodule-bluez5-device.c\n"
+                else
+                    cat << 'EOF'
+Card #42
+	Name: bluez_card.AA_BB_CC_DD_EE_FF
+	Driver: module-bluez5-device.c
+	Owner Module: 99
+	Profiles:
+		headset-head-unit: Headset Head Unit (HSP/HFP) (codec LC3-24kHz)
+		headset-head-unit-msbc: Headset Head Unit (HSP/HFP) (codec mSBC)
+		a2dp-sink: High Fidelity Playback (A2DP Sink)
+		off: Off
+	Active Profile: headset-head-unit-msbc
+EOF
+                fi
+                ;;
+            short)
+                if [[ "${3:-}" == "sources" ]]; then
+                    printf "1\tbluez_input.AA:BB:CC:DD:EE:FF\tmodule-bluez5-device.c\n"
+                fi
+                ;;
+        esac
+        ;;
+    info)
+        cat << 'EOF'
+Server String: /run/user/1000/pulse/native
+Library Protocol Version: 35
+Server Protocol Version: 35
+Is Local: yes
+Client Index: 99
+Tile Size: 65472
+User Name: testuser
+Host Name: testhost
+Server Name: pulseaudio
+Server Version: 15.0.0
+Default Sink: bluez_output.AA:BB:CC:DD:EE:FF.1
+Default Source: bluez_input.AA:BB:CC:DD:EE:FF
+Cookie: abcdef
+EOF
+        ;;
+    set-card-profile)
+        printf '%s\n' "$*" >> "$SENTINEL_DIR/set-card-profile.log"
+        ;;
+    set-default-source)
+        printf '%s\n' "$*" >> "$SENTINEL_DIR/set-default-source.log"
+        ;;
+    set-source-volume)
+        printf '%s\n' "$*" >> "$SENTINEL_DIR/set-source-volume.log"
+        ;;
+    get-source-volume)
+        echo "Volume: front-left: 65536 /  100% / 0.00 dB"
+        ;;
+    get-default-source)
+        echo "bluez_input.AA:BB:CC:DD:EE:FF"
+        ;;
+    --format=json)
+        if [[ "${2:-}" == "subscribe" ]]; then
+            echo '{"event":"change","on":"card","index":42}'
+            sleep 0.5
+            echo '{"event":"change","on":"server"}'
+            exec sleep infinity
+        fi
+        ;;
+esac

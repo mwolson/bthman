@@ -1,0 +1,8 @@
+#!/sbin/openrc-run
+
+description="Manage Bluetooth HFP profiles and reconnect headsets after resume"
+supervisor=supervise-daemon
+
+command="$HOME/.local/bin/bthman"
+respawn_delay=1
+respawn_max=0

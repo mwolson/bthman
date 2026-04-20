@@ -1,0 +1,13 @@
+[Unit]
+Description=Manage Bluetooth HFP profiles and reconnect headsets after resume
+After=graphical-session.target pipewire.service pipewire-pulse.service wireplumber.service bluetooth.service
+
+[Service]
+Type=simple
+ExecReload=/bin/kill -HUP $MAINPID
+ExecStart=%h/.local/bin/bthman
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=graphical-session.target

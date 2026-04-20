@@ -1,0 +1,14 @@
+#!/bin/bash
+set -euo pipefail
+
+SENTINEL_DIR="${BTHMAN_TEST_SENTINEL:-/tmp/bthman-test}"
+mkdir -p "$SENTINEL_DIR"
+printf '%s\n' "$*" >> "$SENTINEL_DIR/wpctl-calls.log"
+
+if [[ "${1:-}" == "settings" && "${2:-}" == "bluetooth.autoswitch-to-headset-profile" ]]; then
+    if [[ -n "${BTHMAN_TEST_WPCTL_FALSE:-}" ]]; then
+        echo "bluetooth.autoswitch-to-headset-profile: false"
+    else
+        echo "bluetooth.autoswitch-to-headset-profile: true"
+    fi
+fi

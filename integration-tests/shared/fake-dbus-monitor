@@ -1,0 +1,18 @@
+#!/bin/bash
+set -euo pipefail
+
+SENTINEL_DIR="${BTHMAN_TEST_SENTINEL:-/tmp/bthman-test}"
+mkdir -p "$SENTINEL_DIR"
+printf '%s\n' "$*" >> "$SENTINEL_DIR/dbus-monitor-calls.log"
+
+cat << 'EOF'
+signal time=1700000000.000000 sender=:1.1 -> destination=(null destination) serial=42 path=/org/freedesktop/login1; interface=org.freedesktop.login1.Manager; member=PrepareForSleep
+   boolean true
+EOF
+sleep 0.5
+cat << 'EOF'
+signal time=1700000001.000000 sender=:1.1 -> destination=(null destination) serial=43 path=/org/freedesktop/login1; interface=org.freedesktop.login1.Manager; member=PrepareForSleep
+   boolean false
+EOF
+
+exec sleep infinity
