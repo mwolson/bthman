@@ -51,7 +51,8 @@ Prefer to write plans in the `plans/` directory.
 The Rust toolchain is pinned via `rust-toolchain.toml` (channel, profile,
 components). `rustup` auto-installs it on first `cargo` invocation, so editors
 pick up a version-matched `rust-analyzer` with no manual steps. Bump the pin
-deliberately; CI reads the same file via `dtolnay/rust-toolchain@master`.
+deliberately; CI installs the pinned toolchain via
+`rustup show active-toolchain || rustup toolchain install`.
 
 ### Running tests
 
