@@ -103,7 +103,7 @@ run_test "update config" \
 run_test "send SIGHUP to daemon" \
     "pkill -HUP -f /usr/local/bin/bthman"
 run_test "daemon reloaded config" \
-    'for i in $(seq 1 5); do grep -q "Reloading config" '"$HOME/bthman.log"' 2>/dev/null && exit 0; sleep 1; done; exit 1'
+    'for i in $(seq 1 5); do grep -q "Config reloaded" '"$HOME/bthman.log"' 2>/dev/null && exit 0; sleep 1; done; exit 1'
 run_test "daemon still running after reload" \
     "pgrep -f bthman >/dev/null"
 run_test "stop after reload test" \

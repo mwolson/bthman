@@ -112,7 +112,7 @@ run_test "update config" \
 run_test "reload via systemctl succeeds" \
     'systemctl --user reload bthman.service'
 run_test "daemon reloaded config" \
-    'for i in $(seq 1 5); do journalctl --user -u bthman.service --no-pager 2>&1 | grep -q "Reloading config" && exit 0; sleep 1; done; exit 1'
+    'for i in $(seq 1 5); do journalctl --user -u bthman.service --no-pager 2>&1 | grep -q "Config reloaded" && exit 0; sleep 1; done; exit 1'
 run_test "daemon still running after reload" \
     'systemctl --user is-active bthman.service'
 run_test "stop after reload test" \
