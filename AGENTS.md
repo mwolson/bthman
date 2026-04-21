@@ -166,16 +166,14 @@ When the user provides a version (or indicates major/minor/bugfix):
    For each commit, run `git show <commit>` to see the full commit message and
    diff.
 
-4. Create a draft GitHub release:
+4. The publish workflow creates the GitHub release as a draft with the three
+   platform tarballs attached and auto-generated notes. Confirm it exists:
 
    ```sh
-   gh release create v<version> --draft --title "v<version>" --generate-notes
+   gh release view v<version>
    ```
 
-   `action-gh-release@v2` in the publish workflow already attaches the three
-   platform tarballs to the release; the draft just adds notes.
-
-5. Enhance the release notes with more context:
+5. Enhance the draft's release notes with more context:
    - Use insights from examining each commit in step 3
    - Group related changes under descriptive headings (e.g., "### Refactored X",
      "### Fixed Y")
@@ -189,7 +187,13 @@ When the user provides a version (or indicates major/minor/bugfix):
    - Put under-the-hood changes later (refactoring, internal improvements, docs)
    - Within each section, order by user impact (most impactful first)
 
-6. Tell the user to review the draft release and provide a link:
+6. Publish the release (flip off the draft flag):
+
+   ```sh
+   gh release edit v<version> --draft=false
+   ```
+
+7. Tell the user to review the published release and provide a link:
 
    ```
    https://github.com/mwolson/bthman/releases
