@@ -22,6 +22,9 @@ pub fn check_required() -> Result<()> {
             );
         }
     }
+    if which("parecord").is_none() {
+        warn!("parecord not found in PATH; stuck-SCO detection will be disabled");
+    }
     Ok(())
 }
 

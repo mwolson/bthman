@@ -8,6 +8,7 @@ pub mod logging;
 pub mod pactl;
 pub mod reconcile;
 pub mod reconnect;
+pub mod sco_probe;
 pub mod service;
 pub mod service_files;
 pub mod signals;

@@ -31,6 +31,10 @@ pub struct Cli {
     #[arg(long = "debounce-ms", value_name = "N")]
     pub debounce_ms: Option<u64>,
 
+    /// Probe bluetooth HFP sources for stuck-SCO silence (default true)
+    #[arg(long = "probe-stuck-sco", value_name = "BOOL", num_args = 0..=1, default_missing_value = "true")]
+    pub probe_stuck_sco: Option<bool>,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -49,6 +53,7 @@ pub struct Overrides {
     pub input_volume: Option<u32>,
     pub broken_vendors: Option<Vec<String>>,
     pub debounce_ms: Option<u64>,
+    pub probe_stuck_sco: Option<bool>,
 }
 
 pub fn overrides(cli: &Cli) -> Overrides {
@@ -65,5 +70,6 @@ pub fn overrides(cli: &Cli) -> Overrides {
             Some(cli.broken_vendor.clone())
         },
         debounce_ms: cli.debounce_ms,
+        probe_stuck_sco: cli.probe_stuck_sco,
     }
 }

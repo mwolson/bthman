@@ -6,11 +6,13 @@ use tracing::info;
 
 use crate::config::Config;
 use crate::pactl::{self, PactlRunner, RealPactl};
+use crate::sco_probe::{self, ProbeRunner, RealProbe, DEFAULT_PROBE_DURATION};
 use crate::wpctl;
 
 pub fn reconcile(config: &Config, trigger: &str) -> Result<()> {
     reconcile_with(
         &RealPactl,
+        &RealProbe,
         &wpctl::external_recorder_active,
         &|| thread::sleep(Duration::from_secs(1)),
         config,
@@ -20,6 +22,7 @@ pub fn reconcile(config: &Config, trigger: &str) -> Result<()> {
 
 pub fn reconcile_with(
     runner: &dyn PactlRunner,
+    probe: &dyn ProbeRunner,
     recorder_active: &dyn Fn() -> bool,
     post_change: &dyn Fn(),
     config: &Config,
@@ -45,6 +48,37 @@ pub fn reconcile_with(
     }
     if !changed {
         info!("No changes needed");
+    }
+    if config.probe_stuck_sco {
+        probe_bluetooth_sources(runner, probe, &cards_dump)?;
+    }
+    Ok(())
+}
+
+fn probe_bluetooth_sources(
+    runner: &dyn PactlRunner,
+    probe: &dyn ProbeRunner,
+    cards_dump: &str,
+) -> Result<()> {
+    for card in pactl::list_bluetooth_cards(runner)? {
+        let active = pactl::get_active_profile(cards_dump, &card);
+        if !active.starts_with("headset-head-unit") {
+            continue;
+        }
+        let addr = card
+            .strip_prefix("bluez_card.")
+            .unwrap_or(&card)
+            .replace('_', ":");
+        let source = format!("bluez_input.{}", addr);
+        if pactl::source_output_count(runner, &source)? == 0 {
+            continue;
+        }
+        if pactl::source_is_muted(runner, &source) {
+            continue;
+        }
+        info!("Probing {} for stuck-SCO silence", source);
+        let result = sco_probe::probe_source(probe, &source, DEFAULT_PROBE_DURATION);
+        sco_probe::log_result(&source, &result);
     }
     Ok(())
 }

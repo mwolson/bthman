@@ -199,3 +199,37 @@ pub fn find_headset_source(runner: &dyn PactlRunner, cards_dump: &str) -> Result
     }
     Ok(None)
 }
+
+pub fn source_index(runner: &dyn PactlRunner, source: &str) -> Result<Option<String>> {
+    let out = runner.run(&["list", "short", "sources"])?;
+    for line in out.lines() {
+        let mut fields = line.split('\t');
+        let idx = fields.next();
+        let name = fields.next();
+        if name == Some(source) {
+            return Ok(idx.map(|s| s.to_string()));
+        }
+    }
+    Ok(None)
+}
+
+pub fn source_output_count(runner: &dyn PactlRunner, source: &str) -> Result<usize> {
+    let Some(idx) = source_index(runner, source)? else {
+        return Ok(0);
+    };
+    let out = runner.run(&["list", "short", "source-outputs"])?;
+    let count = out
+        .lines()
+        .filter(|line| {
+            let mut fields = line.split('\t');
+            fields.next();
+            fields.next() == Some(idx.as_str())
+        })
+        .count();
+    Ok(count)
+}
+
+pub fn source_is_muted(runner: &dyn PactlRunner, source: &str) -> bool {
+    let out = runner.run_ok(&["get-source-mute", source]);
+    out.contains("yes")
+}

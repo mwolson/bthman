@@ -14,6 +14,7 @@ pub struct Config {
     pub input_volume: u32,
     pub broken_vendors: HashSet<String>,
     pub debounce: Duration,
+    pub probe_stuck_sco: bool,
     pub reconnect_timeout: Duration,
     pub reconnect_backoff: Vec<Duration>,
     preferred_profiles_user_set: bool,
@@ -26,6 +27,7 @@ impl Default for Config {
             input_volume: 100,
             broken_vendors: ["0e8d".into()].into_iter().collect(),
             debounce: Duration::from_millis(500),
+            probe_stuck_sco: true,
             reconnect_timeout: Duration::from_secs(8),
             reconnect_backoff: vec![
                 Duration::from_millis(0),
@@ -80,22 +82,13 @@ impl Config {
         if let Some(ms) = overrides.debounce_ms {
             self.debounce = Duration::from_millis(ms);
         }
+        if let Some(probe) = overrides.probe_stuck_sco {
+            self.probe_stuck_sco = probe;
+        }
     }
 
     fn apply_flag(&mut self, flag: &str, value: &str, path: &Path) -> Result<()> {
         match flag {
-            "--preferred-profile" => {
-                if !self.preferred_profiles_user_set {
-                    self.preferred_profiles.clear();
-                    self.preferred_profiles_user_set = true;
-                }
-                self.preferred_profiles.push(value.to_string());
-            }
-            "--input-volume" => {
-                self.input_volume = value.parse().map_err(|_| {
-                    anyhow!("invalid --input-volume in {}: {}", path.display(), value)
-                })?;
-            }
             "--broken-vendor" => {
                 self.broken_vendors.insert(value.to_lowercase());
             }
@@ -104,6 +97,27 @@ impl Config {
                     anyhow!("invalid --debounce-ms in {}: {}", path.display(), value)
                 })?;
                 self.debounce = Duration::from_millis(ms);
+            }
+            "--input-volume" => {
+                self.input_volume = value.parse().map_err(|_| {
+                    anyhow!("invalid --input-volume in {}: {}", path.display(), value)
+                })?;
+            }
+            "--preferred-profile" => {
+                if !self.preferred_profiles_user_set {
+                    self.preferred_profiles.clear();
+                    self.preferred_profiles_user_set = true;
+                }
+                self.preferred_profiles.push(value.to_string());
+            }
+            "--probe-stuck-sco" => {
+                self.probe_stuck_sco = parse_bool(value).ok_or_else(|| {
+                    anyhow!(
+                        "invalid --probe-stuck-sco in {} (expected true/false): {}",
+                        path.display(),
+                        value
+                    )
+                })?;
             }
             _ => bail!("unsupported flag '{}' in {}", flag, path.display()),
         }
@@ -116,6 +130,14 @@ pub fn default_conf_path() -> Option<PathBuf> {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
     Some(base.join("bthman.conf"))
+}
+
+fn parse_bool(value: &str) -> Option<bool> {
+    match value.to_lowercase().as_str() {
+        "true" | "yes" | "1" | "on" => Some(true),
+        "false" | "no" | "0" | "off" => Some(false),
+        _ => None,
+    }
 }
 
 pub fn parse_conf(text: &str, path: &Path) -> Result<Vec<(String, String)>> {
