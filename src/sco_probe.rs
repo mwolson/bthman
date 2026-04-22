@@ -50,6 +50,8 @@ pub struct RealProbe;
 impl ProbeRunner for RealProbe {
     fn capture_raw(&self, source: &str, duration: Duration) -> Option<Vec<u8>> {
         let target_bytes = bytes_for_duration(duration);
+        // pacat 17.0-98 (PipeWire's pulse-compat) writes zero bytes when the
+        // output path is "-"; /dev/stdout works correctly via the piped fd.
         let mut child = match Command::new("parecord")
             .args([
                 "--device",
@@ -62,7 +64,7 @@ impl ProbeRunner for RealProbe {
                 "s16le",
                 "--file-format=raw",
                 "--latency-msec=50",
-                "-",
+                "/dev/stdout",
             ])
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
