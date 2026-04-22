@@ -1,8 +1,9 @@
 use std::cell::RefCell;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bthman::sco_probe::{
-    bytes_for_duration, classify, probe_source, ProbeResult, ProbeRunner, DEFAULT_PROBE_DURATION,
+    bytes_for_duration, classify, probe_source, ProbeResult, ProbeRunner, ProbeState,
+    DEFAULT_PROBE_DURATION,
 };
 
 struct FakeProbe {
@@ -95,4 +96,54 @@ fn probe_source_flags_signal_when_any_nonzero() {
 fn bytes_for_duration_matches_500ms_at_16khz_mono_s16() {
     assert_eq!(bytes_for_duration(Duration::from_millis(500)), 16000);
     assert_eq!(bytes_for_duration(Duration::from_millis(1000)), 32000);
+}
+
+#[test]
+fn probe_state_allows_first_probe() {
+    let mut state = ProbeState::new();
+    let now = Instant::now();
+    assert!(state.should_probe(
+        "bluez_input.AA:BB:CC:DD:EE:FF",
+        now,
+        Duration::from_secs(20)
+    ));
+}
+
+#[test]
+fn probe_state_blocks_second_probe_within_cooldown() {
+    let mut state = ProbeState::new();
+    let t0 = Instant::now();
+    assert!(state.should_probe("bluez_input.AA:BB:CC:DD:EE:FF", t0, Duration::from_secs(20)));
+    let t1 = t0 + Duration::from_secs(5);
+    assert!(!state.should_probe("bluez_input.AA:BB:CC:DD:EE:FF", t1, Duration::from_secs(20)));
+}
+
+#[test]
+fn probe_state_allows_second_probe_after_cooldown() {
+    let mut state = ProbeState::new();
+    let t0 = Instant::now();
+    assert!(state.should_probe("bluez_input.AA:BB:CC:DD:EE:FF", t0, Duration::from_secs(20)));
+    let t1 = t0 + Duration::from_secs(21);
+    assert!(state.should_probe("bluez_input.AA:BB:CC:DD:EE:FF", t1, Duration::from_secs(20)));
+}
+
+#[test]
+fn probe_state_tracks_sources_independently() {
+    let mut state = ProbeState::new();
+    let now = Instant::now();
+    assert!(state.should_probe(
+        "bluez_input.AA:BB:CC:DD:EE:FF",
+        now,
+        Duration::from_secs(20)
+    ));
+    assert!(state.should_probe(
+        "bluez_input.11:22:33:44:55:66",
+        now,
+        Duration::from_secs(20)
+    ));
+    assert!(!state.should_probe(
+        "bluez_input.AA:BB:CC:DD:EE:FF",
+        now,
+        Duration::from_secs(20)
+    ));
 }

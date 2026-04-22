@@ -1,13 +1,38 @@
+use std::collections::HashMap;
 use std::io::Read;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 pub const PROBE_RATE: u32 = 16000;
 pub const PROBE_CHANNELS: u32 = 1;
 pub const PROBE_SAMPLE_BYTES: usize = 2;
 pub const DEFAULT_PROBE_DURATION: Duration = Duration::from_millis(500);
+pub const DEFAULT_PROBE_COOLDOWN: Duration = Duration::from_secs(20);
+
+#[derive(Debug, Default)]
+pub struct ProbeState {
+    last_probe: HashMap<String, Instant>,
+}
+
+impl ProbeState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Records a probe attempt for `source` at `now` and returns true if the
+    /// caller should proceed, or false if `source` was probed within `cooldown`.
+    pub fn should_probe(&mut self, source: &str, now: Instant, cooldown: Duration) -> bool {
+        if let Some(last) = self.last_probe.get(source) {
+            if now.saturating_duration_since(*last) < cooldown {
+                return false;
+            }
+        }
+        self.last_probe.insert(source.to_string(), now);
+        true
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProbeResult {
@@ -120,10 +145,10 @@ pub fn log_result(source: &str, result: &ProbeResult) {
             source
         ),
         ProbeResult::HasSignal => {
-            debug!("Probe: {} has signal", source);
+            info!("Probe: {} has signal", source);
         }
         ProbeResult::Unavailable => {
-            debug!(
+            info!(
                 "Probe: {} unavailable (parecord missing or capture failed)",
                 source
             );

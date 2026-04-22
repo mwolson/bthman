@@ -14,6 +14,7 @@ use crate::config::{self, Config};
 use crate::events::{self, PactlEvent, SignalKind};
 use crate::reconcile;
 use crate::reconnect::{RealOps, Scheduler};
+use crate::sco_probe::ProbeState;
 use crate::signals::Handles;
 use crate::sleep_monitor::{self, SleepTransition};
 
@@ -28,7 +29,8 @@ pub fn run_once(config: &Config) -> Result<()> {
 
 pub fn run_watch(mut config: Config, overrides: Overrides, sigs: Handles) -> Result<()> {
     info!("Preferred HFP profiles: {:?}", config.preferred_profiles);
-    if let Err(err) = reconcile::reconcile(&config, "startup") {
+    let mut probe_state = ProbeState::new();
+    if let Err(err) = reconcile::reconcile_persistent(&config, "startup", &mut probe_state) {
         warn!("startup reconcile failed: {:#}", err);
     }
 
@@ -55,12 +57,15 @@ pub fn run_watch(mut config: Config, overrides: Overrides, sigs: Handles) -> Res
             &mut pre_sleep,
             &mut pending_event,
             &mut deadline,
+            &mut probe_state,
         );
 
         if matches!(exit, InnerExit::Restart) {
             if let Some(ev) = &pending_event {
                 let trigger = ev.formatted();
-                if let Err(err) = reconcile::reconcile(&config, &trigger) {
+                if let Err(err) =
+                    reconcile::reconcile_persistent(&config, &trigger, &mut probe_state)
+                {
                     warn!("reconcile failed: {:#}", err);
                 }
             }
@@ -91,6 +96,7 @@ fn inner_loop(
     pre_sleep: &mut HashSet<String>,
     pending_event: &mut Option<PactlEvent>,
     deadline: &mut Option<Instant>,
+    probe_state: &mut ProbeState,
 ) -> InnerExit {
     loop {
         if sigs.stop_requested() {
@@ -108,7 +114,7 @@ fn inner_loop(
 
         select! {
             recv(pa_rx) -> msg => match msg {
-                Ok(ev) => handle_event(ev, pending_event, deadline, config),
+                Ok(ev) => handle_event(ev, pending_event, deadline, config, probe_state),
                 Err(_) => {
                     info!("pactl subscribe ended; will restart");
                     return InnerExit::Restart;
@@ -130,7 +136,9 @@ fn inner_loop(
                 if let (Some(ev), Some(dl)) = (pending_event.as_ref(), *deadline) {
                     if Instant::now() >= dl {
                         let trigger = ev.formatted();
-                        if let Err(err) = reconcile::reconcile(config, &trigger) {
+                        if let Err(err) =
+                            reconcile::reconcile_persistent(config, &trigger, probe_state)
+                        {
                             warn!("reconcile failed: {:#}", err);
                         }
                         *pending_event = None;
@@ -178,6 +186,7 @@ fn handle_event(
     pending: &mut Option<PactlEvent>,
     deadline: &mut Option<Instant>,
     config: &Config,
+    probe_state: &mut ProbeState,
 ) {
     let new_deadline = Instant::now() + config.debounce;
     match pending.as_ref() {
@@ -190,7 +199,7 @@ fn handle_event(
                 *deadline = Some(new_deadline);
             } else {
                 let trigger = current.formatted();
-                if let Err(err) = reconcile::reconcile(config, &trigger) {
+                if let Err(err) = reconcile::reconcile_persistent(config, &trigger, probe_state) {
                     warn!("reconcile failed: {:#}", err);
                 }
                 *pending = Some(event);

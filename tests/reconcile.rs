@@ -7,7 +7,7 @@ use bthman::cli::Overrides;
 use bthman::config::Config;
 use bthman::pactl::PactlRunner;
 use bthman::reconcile::reconcile_with;
-use bthman::sco_probe::ProbeRunner;
+use bthman::sco_probe::{ProbeRunner, ProbeState};
 
 struct NoProbe;
 
@@ -126,7 +126,16 @@ fn base_config(preferred: Vec<&str>) -> Config {
 fn skips_when_external_recorder_active() {
     let fake = FakePactl::new(vec![]);
     let config = test_config(vec!["headset-head-unit"]);
-    reconcile_with(&fake, &NoProbe, &|| true, &|| {}, &config, "test").unwrap();
+    reconcile_with(
+        &fake,
+        &NoProbe,
+        &mut ProbeState::new(),
+        &|| true,
+        &|| {},
+        &config,
+        "test",
+    )
+    .unwrap();
     assert!(fake.calls.borrow().is_empty());
 }
 
@@ -144,7 +153,16 @@ fn no_change_when_active_matches_preferred() {
         ),
     ]);
     let config = test_config(vec!["headset-head-unit", "headset-head-unit-msbc"]);
-    reconcile_with(&fake, &NoProbe, &|| false, &|| {}, &config, "test").unwrap();
+    reconcile_with(
+        &fake,
+        &NoProbe,
+        &mut ProbeState::new(),
+        &|| false,
+        &|| {},
+        &config,
+        "test",
+    )
+    .unwrap();
     assert!(!fake.has_call(&[
         "set-card-profile",
         "bluez_card.AA_BB_CC_DD_EE_FF",
@@ -179,7 +197,16 @@ fn switches_card_profile_to_preferred() {
         ),
     ]);
     let config = test_config(vec!["headset-head-unit-msbc"]);
-    reconcile_with(&fake, &NoProbe, &|| false, &|| {}, &config, "test").unwrap();
+    reconcile_with(
+        &fake,
+        &NoProbe,
+        &mut ProbeState::new(),
+        &|| false,
+        &|| {},
+        &config,
+        "test",
+    )
+    .unwrap();
     assert!(fake.has_call(&[
         "set-card-profile",
         "bluez_card.AA_BB_CC_DD_EE_FF",
@@ -213,7 +240,16 @@ fn switches_default_source_from_monitor() {
         ),
     ]);
     let config = test_config(vec!["headset-head-unit"]);
-    reconcile_with(&fake, &NoProbe, &|| false, &|| {}, &config, "test").unwrap();
+    reconcile_with(
+        &fake,
+        &NoProbe,
+        &mut ProbeState::new(),
+        &|| false,
+        &|| {},
+        &config,
+        "test",
+    )
+    .unwrap();
     assert!(fake.has_call(&["set-default-source", "bluez_input.AA:BB:CC:DD:EE:FF"]));
 }
 
@@ -236,7 +272,16 @@ fn does_not_switch_when_preferred_unavailable() {
         (vec!["list", "short", "sources"], "1\tsome_other_source\n"),
     ]);
     let config = test_config(vec!["headset-head-unit"]);
-    reconcile_with(&fake, &NoProbe, &|| false, &|| {}, &config, "test").unwrap();
+    reconcile_with(
+        &fake,
+        &NoProbe,
+        &mut ProbeState::new(),
+        &|| false,
+        &|| {},
+        &config,
+        "test",
+    )
+    .unwrap();
     assert!(!fake.has_call(&["set-default-source", "bluez_input.AA:BB:CC:DD:EE:FF"]));
 }
 
@@ -268,7 +313,16 @@ fn probe_skipped_when_no_source_outputs_present() {
     ]);
     let probe = RecordingProbe::new(Some(vec![0u8; 16000]));
     let config = base_config(vec!["headset-head-unit"]);
-    reconcile_with(&fake, &probe, &|| false, &|| {}, &config, "test").unwrap();
+    reconcile_with(
+        &fake,
+        &probe,
+        &mut ProbeState::new(),
+        &|| false,
+        &|| {},
+        &config,
+        "test",
+    )
+    .unwrap();
     assert!(
         probe.calls.borrow().is_empty(),
         "probe must not run when no source-outputs are present"
@@ -306,7 +360,16 @@ fn probe_skipped_when_card_is_not_hfp() {
     ]);
     let probe = RecordingProbe::new(Some(vec![0u8; 16000]));
     let config = base_config(vec!["headset-head-unit"]);
-    reconcile_with(&fake, &probe, &|| false, &|| {}, &config, "test").unwrap();
+    reconcile_with(
+        &fake,
+        &probe,
+        &mut ProbeState::new(),
+        &|| false,
+        &|| {},
+        &config,
+        "test",
+    )
+    .unwrap();
     assert!(
         probe.calls.borrow().is_empty(),
         "probe must not run on non-HFP card"
@@ -348,7 +411,16 @@ fn probe_runs_when_hfp_active_with_recorder_and_detects_all_zero() {
     ]);
     let probe = RecordingProbe::new(Some(vec![0u8; 16000]));
     let config = base_config(vec!["headset-head-unit"]);
-    reconcile_with(&fake, &probe, &|| false, &|| {}, &config, "test").unwrap();
+    reconcile_with(
+        &fake,
+        &probe,
+        &mut ProbeState::new(),
+        &|| false,
+        &|| {},
+        &config,
+        "test",
+    )
+    .unwrap();
     assert_eq!(
         probe.calls.borrow().as_slice(),
         &["bluez_input.AA:BB:CC:DD:EE:FF".to_string()]
@@ -390,7 +462,16 @@ fn probe_skipped_when_source_is_muted() {
     ]);
     let probe = RecordingProbe::new(Some(vec![0u8; 16000]));
     let config = base_config(vec!["headset-head-unit"]);
-    reconcile_with(&fake, &probe, &|| false, &|| {}, &config, "test").unwrap();
+    reconcile_with(
+        &fake,
+        &probe,
+        &mut ProbeState::new(),
+        &|| false,
+        &|| {},
+        &config,
+        "test",
+    )
+    .unwrap();
     assert!(
         probe.calls.borrow().is_empty(),
         "probe must not run on muted source"
