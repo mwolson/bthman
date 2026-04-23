@@ -1,5 +1,5 @@
 use anyhow::Result;
-use bthman::{cli, config, daemon, deps, logging, service, signals};
+use bthman::{cli, config, daemon, deps, logging, probe_cmd, service, signals};
 use clap::Parser;
 use tracing::error;
 
@@ -18,6 +18,10 @@ fn main() {
 fn dispatch(parsed: cli::Cli) -> Result<()> {
     match &parsed.command {
         Some(cli::Command::InstallService) => service::install(),
+        Some(cli::Command::Probe {
+            source,
+            duration_ms,
+        }) => probe_cmd::run_manual_probe(source.as_deref(), *duration_ms),
         Some(cli::Command::UninstallService) => service::uninstall(),
         None => run_daemon(parsed),
     }

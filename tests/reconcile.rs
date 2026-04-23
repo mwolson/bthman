@@ -286,50 +286,6 @@ fn does_not_switch_when_preferred_unavailable() {
 }
 
 #[test]
-fn probe_skipped_when_no_source_outputs_present() {
-    let fake = FakePactl::new(vec![
-        (vec!["list", "cards"], &cards_dump("headset-head-unit")),
-        (
-            vec!["list", "cards", "short"],
-            "42\tbluez_card.AA_BB_CC_DD_EE_FF\tmodule\n",
-        ),
-        (
-            vec!["list", "cards", "short"],
-            "42\tbluez_card.AA_BB_CC_DD_EE_FF\tmodule\n",
-        ),
-        (
-            vec!["list", "cards", "short"],
-            "42\tbluez_card.AA_BB_CC_DD_EE_FF\tmodule\n",
-        ),
-        (
-            vec!["info"],
-            "Default Source: bluez_input.AA:BB:CC:DD:EE:FF\n",
-        ),
-        (
-            vec!["list", "short", "sources"],
-            "77\tbluez_input.AA:BB:CC:DD:EE:FF\tmodule\n",
-        ),
-        (vec!["list", "short", "source-outputs"], ""),
-    ]);
-    let probe = RecordingProbe::new(Some(vec![0u8; 16000]));
-    let config = base_config(vec!["headset-head-unit"]);
-    reconcile_with(
-        &fake,
-        &probe,
-        &mut ProbeState::new(),
-        &|| false,
-        &|| {},
-        &config,
-        "test",
-    )
-    .unwrap();
-    assert!(
-        probe.calls.borrow().is_empty(),
-        "probe must not run when no source-outputs are present"
-    );
-}
-
-#[test]
 fn probe_skipped_when_card_is_not_hfp() {
     let fake = FakePactl::new(vec![
         (vec!["list", "cards"], &cards_dump("a2dp-sink")),
@@ -376,8 +332,12 @@ fn probe_skipped_when_card_is_not_hfp() {
     );
 }
 
+// Gate relaxed: the probe now fires on HFP-active cards regardless of whether
+// any application has an open source-output, because AirPods Pro can reach the
+// stuck-SCO state even with no recorders attached. The only remaining gates
+// are HFP-active, not-muted, and the 20s per-source cooldown.
 #[test]
-fn probe_runs_when_hfp_active_with_recorder_and_detects_all_zero() {
+fn probe_runs_when_hfp_active_and_detects_all_zero() {
     let fake = FakePactl::new(vec![
         (vec!["list", "cards"], &cards_dump("headset-head-unit")),
         (
@@ -395,14 +355,6 @@ fn probe_runs_when_hfp_active_with_recorder_and_detects_all_zero() {
         (
             vec!["info"],
             "Default Source: bluez_input.AA:BB:CC:DD:EE:FF\n",
-        ),
-        (
-            vec!["list", "short", "sources"],
-            "77\tbluez_input.AA:BB:CC:DD:EE:FF\tmodule\n",
-        ),
-        (
-            vec!["list", "short", "source-outputs"],
-            "99\t77\t88\tPipeWire\ts16le 2ch 16000Hz\n",
         ),
         (
             vec!["get-source-mute", "bluez_input.AA:BB:CC:DD:EE:FF"],
@@ -425,6 +377,10 @@ fn probe_runs_when_hfp_active_with_recorder_and_detects_all_zero() {
         probe.calls.borrow().as_slice(),
         &["bluez_input.AA:BB:CC:DD:EE:FF".to_string()]
     );
+    assert!(
+        !fake.has_call(&["list", "short", "source-outputs"]),
+        "probe_bluetooth_sources must no longer gate on source-output count"
+    );
 }
 
 #[test]
@@ -446,14 +402,6 @@ fn probe_skipped_when_source_is_muted() {
         (
             vec!["info"],
             "Default Source: bluez_input.AA:BB:CC:DD:EE:FF\n",
-        ),
-        (
-            vec!["list", "short", "sources"],
-            "77\tbluez_input.AA:BB:CC:DD:EE:FF\tmodule\n",
-        ),
-        (
-            vec!["list", "short", "source-outputs"],
-            "99\t77\t88\tPipeWire\ts16le 2ch 16000Hz\n",
         ),
         (
             vec!["get-source-mute", "bluez_input.AA:BB:CC:DD:EE:FF"],

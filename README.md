@@ -135,8 +135,17 @@ rc-service bthman status
 bthman                    Run as a daemon (default)
 bthman --once             Reconcile once and exit
 bthman install-service    Install and enable the service (systemd or OpenRC)
+bthman probe              Probe HFP sources for stuck-SCO silence and exit
 bthman uninstall-service  Disable and remove the service (systemd or OpenRC)
 ```
+
+`bthman probe` runs the same capture-and-classify logic the daemon uses to
+detect AirPods-style stuck HFP SCO (see below), but bypasses the daemon's
+cooldown and recorder-present gating. With no arguments it discovers every bluez
+card currently on an HFP profile. Pass `--source=<name>` to probe a specific
+source, or `--duration-ms=<N>` to override the default 500 ms capture window.
+Muted sources are skipped either way (a muted mic is guaranteed to produce zero
+samples, which would read as a false positive).
 
 ### Daemon options
 
@@ -148,7 +157,27 @@ config file, one per line.
 --input-volume=N              Mic volume target percent (default: 100).
 --broken-vendor=HEX           Repeatable. USB vendor IDs for which to skip LC3.
 --debounce-ms=N               Event debounce window in ms (default: 500).
+--probe-stuck-sco=BOOL        Enable the stuck-SCO probe (default: true).
 ```
+
+### Stuck-SCO detection
+
+After rapid HFP profile churn, some Bluetooth headsets (notably AirPods Pro)
+leave the SCO uplink in a state where the card still reports `headset-head-unit`
+active, the `bluez_input.<addr>` source still runs, but every captured sample is
+bit-exact zero. Downlink still works; the mic is silent. The only known recovery
+is to disconnect and reconnect at the BlueZ layer
+(`bluetoothctl disconnect <addr>` then `connect`).
+
+When `--probe-stuck-sco=true` (the default), the daemon runs a short `parecord`
+capture after each reconcile pass whenever a bluez card is on an HFP profile and
+its source is not muted. A per-source 20s cooldown prevents rapid events from
+triggering back-to-back probes. If the capture is bit-exact zero, the daemon
+logs a warning identifying the stuck source. The daemon does not currently
+auto-reconnect; that remediation is a follow-up.
+
+`parecord` is a soft dependency: if it is missing from PATH, the probe is
+disabled and a warning is logged at startup.
 
 ### Configuration file
 

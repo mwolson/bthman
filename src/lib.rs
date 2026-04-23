@@ -6,6 +6,7 @@ pub mod deps;
 pub mod events;
 pub mod logging;
 pub mod pactl;
+pub mod probe_cmd;
 pub mod reconcile;
 pub mod reconnect;
 pub mod sco_probe;

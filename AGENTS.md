@@ -23,6 +23,23 @@ Prefer to write plans in the `plans/` directory.
 - When writing bash scripts: `#!/bin/bash`, 4-space indentation, fail-fast
   dependency checks.
 
+## Diagnosing live incidents
+
+When the user reports a live Bluetooth/audio issue, capture evidence to `tmp/`
+immediately, before journald rotates the window out. On the author's machine,
+journald has been observed to lose ~30 minutes of history within a few minutes
+of active logging, so "I'll grab the logs later" does not work. Minimum set:
+
+- `journalctl --since "<T-5min>" --until "<T+1min>" > tmp/journal-<ts>.txt`
+- `pactl list cards > tmp/cards-<ts>.txt`
+- `pactl list sources > tmp/sources-<ts>.txt`
+- For suspected stuck-SCO or mic-silence issues: a short `parecord` dump off the
+  affected source plus `bluetoothctl info <addr>`.
+
+`tmp/` is gitignored. Prefer verbose over sparse when capturing; pruning later
+is cheap. Specific incident classes have their own checklists in `plans/` (e.g.,
+`plans/stuck-sco-detection.md` §"Evidence capture on recurrence").
+
 ## Key files
 
 - `src/main.rs` -- clap parse, dispatch to subcommand

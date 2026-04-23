@@ -85,9 +85,6 @@ fn probe_bluetooth_sources(
             .unwrap_or(&card)
             .replace('_', ":");
         let source = format!("bluez_input.{}", addr);
-        if pactl::source_output_count(runner, &source)? == 0 {
-            continue;
-        }
         if pactl::source_is_muted(runner, &source) {
             continue;
         }

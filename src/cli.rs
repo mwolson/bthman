@@ -43,6 +43,20 @@ pub struct Cli {
 pub enum Command {
     /// Install and enable the service (systemd or OpenRC)
     InstallService,
+    /// Probe Bluetooth HFP sources for stuck-SCO silence and exit
+    ///
+    /// Bypasses the daemon's auto-probe gating: fires even when no application
+    /// has an active recording stream on the source, and even when the
+    /// cooldown window has not elapsed. Muted sources are still skipped,
+    /// because zero-valued samples from a muted source are expected.
+    Probe {
+        /// Specific source to probe (default: all HFP-active bluez sources)
+        #[arg(long, value_name = "NAME")]
+        source: Option<String>,
+        /// Probe duration in milliseconds (default: 500)
+        #[arg(long = "duration-ms", value_name = "N")]
+        duration_ms: Option<u64>,
+    },
     /// Disable and remove the service (systemd or OpenRC)
     UninstallService,
 }
