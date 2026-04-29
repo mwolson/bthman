@@ -32,5 +32,5 @@ impl PactlEvent {
 }
 
 pub fn is_interesting(event: &PactlEvent) -> bool {
-    matches!(event.on.as_str(), "card" | "server")
+    matches!(event.on.as_str(), "card" | "server" | "source")
 }

@@ -5,15 +5,16 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use crossbeam_channel::{after, select, unbounded, Receiver};
-use tracing::{info, warn};
+use crossbeam_channel::{after, never, select, unbounded, Receiver};
+use tracing::{error, info, warn};
 
 use crate::bluetoothctl;
 use crate::cli::Overrides;
 use crate::config::{self, Config};
 use crate::events::{self, PactlEvent, SignalKind};
+use crate::log_watcher::{LogEvent, LogWatcher};
 use crate::reconcile;
-use crate::reconnect::{RealOps, Scheduler};
+use crate::reconnect::{Completion, RealOps, Scheduler};
 use crate::sco_probe::ProbeState;
 use crate::signals::Handles;
 use crate::sleep_monitor::{self, SleepTransition};
@@ -38,6 +39,20 @@ pub fn run_watch(mut config: Config, overrides: Overrides, sigs: Handles) -> Res
         let (mut pa_child, pa_rx) = spawn_pactl_subscribe()?;
         let (sleep_child_opt, sleep_rx) = sleep_monitor::spawn();
         let mut sleep_child_opt = sleep_child_opt;
+        let mut log_watcher_opt = match LogWatcher::spawn() {
+            Ok(watcher) => Some(watcher),
+            Err(err) => {
+                info!(
+                    "log_watcher unavailable: {:#}; running in tier-2-only mode",
+                    err
+                );
+                None
+            }
+        };
+        let log_rx = log_watcher_opt
+            .as_ref()
+            .map(LogWatcher::rx)
+            .unwrap_or_else(never);
         let mut scheduler = Scheduler::new(config.reconnect_backoff.clone());
         let ops = RealOps {
             reconnect_timeout: config.reconnect_timeout,
@@ -52,6 +67,7 @@ pub fn run_watch(mut config: Config, overrides: Overrides, sigs: Handles) -> Res
             &sigs,
             &pa_rx,
             &sleep_rx,
+            &log_rx,
             &ops,
             &mut scheduler,
             &mut pre_sleep,
@@ -63,9 +79,13 @@ pub fn run_watch(mut config: Config, overrides: Overrides, sigs: Handles) -> Res
         if matches!(exit, InnerExit::Restart) {
             if let Some(ev) = &pending_event {
                 let trigger = ev.formatted();
-                if let Err(err) =
-                    reconcile::reconcile_persistent(&config, &trigger, &mut probe_state)
-                {
+                if let Err(err) = reconcile::reconcile_persistent_with_reconnect(
+                    &config,
+                    &trigger,
+                    &mut probe_state,
+                    &ops,
+                    &mut scheduler,
+                ) {
                     warn!("reconcile failed: {:#}", err);
                 }
             }
@@ -74,6 +94,9 @@ pub fn run_watch(mut config: Config, overrides: Overrides, sigs: Handles) -> Res
         stop_child(&mut pa_child);
         if let Some(mut child) = sleep_child_opt.take() {
             stop_child(&mut child);
+        }
+        if let Some(watcher) = log_watcher_opt.as_mut() {
+            stop_child(watcher.child_mut());
         }
 
         if matches!(exit, InnerExit::Stopped) {
@@ -91,6 +114,7 @@ fn inner_loop(
     sigs: &Handles,
     pa_rx: &Receiver<PactlEvent>,
     sleep_rx: &Receiver<SleepTransition>,
+    log_rx: &Receiver<LogEvent>,
     ops: &RealOps,
     scheduler: &mut Scheduler,
     pre_sleep: &mut HashSet<String>,
@@ -108,13 +132,14 @@ fn inner_loop(
 
         let now = Instant::now();
         scheduler.process(now, ops);
+        handle_scheduler_completions(scheduler, probe_state);
 
-        let timeout = compute_timeout(Instant::now(), *deadline, scheduler);
+        let timeout = compute_timeout(Instant::now(), *deadline, scheduler, probe_state);
         let wait = after(timeout);
 
         select! {
             recv(pa_rx) -> msg => match msg {
-                Ok(ev) => handle_event(ev, pending_event, deadline, config, probe_state),
+                Ok(ev) => handle_event(ev, pending_event, deadline, config, probe_state, ops, scheduler),
                 Err(_) => {
                     info!("pactl subscribe ended; will restart");
                     return InnerExit::Restart;
@@ -127,6 +152,24 @@ fn inner_loop(
                     return InnerExit::Restart;
                 }
             },
+            recv(log_rx) -> msg => match msg {
+                Ok(LogEvent::SeqnumFailure) => {
+                    probe_state.record_seqnum_failure(Instant::now());
+                    if let Err(err) = reconcile::reconcile_persistent_with_reconnect(
+                        config,
+                        "seqnum_failure",
+                        probe_state,
+                        ops,
+                        scheduler,
+                    ) {
+                        warn!("reconcile failed: {:#}", err);
+                    }
+                },
+                Err(_) => {
+                    info!("log_watcher ended; will restart");
+                    return InnerExit::Restart;
+                }
+            },
             recv(sigs.rx) -> msg => match msg {
                 Ok(SignalKind::Stop) => return InnerExit::Stopped,
                 Ok(SignalKind::Reload) => reload_config(config, overrides),
@@ -136,13 +179,29 @@ fn inner_loop(
                 if let (Some(ev), Some(dl)) = (pending_event.as_ref(), *deadline) {
                     if Instant::now() >= dl {
                         let trigger = ev.formatted();
-                        if let Err(err) =
-                            reconcile::reconcile_persistent(config, &trigger, probe_state)
+                        if let Err(err) = reconcile::reconcile_persistent_with_reconnect(
+                            config,
+                            &trigger,
+                            probe_state,
+                            ops,
+                            scheduler,
+                        )
                         {
                             warn!("reconcile failed: {:#}", err);
                         }
                         *pending_event = None;
                         *deadline = None;
+                    }
+                }
+                if pending_event.is_none() && probe_state.next_wakeup(Instant::now()) == Some(Duration::ZERO) {
+                    if let Err(err) = reconcile::reconcile_persistent_with_reconnect(
+                        config,
+                        "follow_up_probe",
+                        probe_state,
+                        ops,
+                        scheduler,
+                    ) {
+                        warn!("reconcile failed: {:#}", err);
                     }
                 }
             }
@@ -154,6 +213,7 @@ fn compute_timeout(
     now: Instant,
     debounce_deadline: Option<Instant>,
     scheduler: &Scheduler,
+    probe_state: &ProbeState,
 ) -> Duration {
     let mut timeout = Duration::from_secs(1);
     if let Some(dl) = debounce_deadline {
@@ -168,7 +228,29 @@ fn compute_timeout(
             timeout = remaining;
         }
     }
+    if let Some(remaining) = probe_state.next_wakeup(now) {
+        if remaining < timeout {
+            timeout = remaining;
+        }
+    }
     timeout
+}
+
+fn handle_scheduler_completions(scheduler: &mut Scheduler, probe_state: &mut ProbeState) {
+    for completion in scheduler.take_completed() {
+        match completion {
+            Completion::Connected { addr } => {
+                probe_state.clear_remediation_in_progress_for_addr(&addr)
+            }
+            Completion::Exhausted { addr, attempts } => {
+                probe_state.clear_remediation_in_progress_for_addr(&addr);
+                error!(
+                    "stuck_sco_remediation_failed: addr={} stage=reconnect attempts={}",
+                    addr, attempts
+                );
+            }
+        }
+    }
 }
 
 fn reload_config(config: &mut Config, overrides: &Overrides) {
@@ -187,6 +269,8 @@ fn handle_event(
     deadline: &mut Option<Instant>,
     config: &Config,
     probe_state: &mut ProbeState,
+    ops: &RealOps,
+    scheduler: &mut Scheduler,
 ) {
     let new_deadline = Instant::now() + config.debounce;
     match pending.as_ref() {
@@ -199,7 +283,13 @@ fn handle_event(
                 *deadline = Some(new_deadline);
             } else {
                 let trigger = current.formatted();
-                if let Err(err) = reconcile::reconcile_persistent(config, &trigger, probe_state) {
+                if let Err(err) = reconcile::reconcile_persistent_with_reconnect(
+                    config,
+                    &trigger,
+                    probe_state,
+                    ops,
+                    scheduler,
+                ) {
                     warn!("reconcile failed: {:#}", err);
                 }
                 *pending = Some(event);

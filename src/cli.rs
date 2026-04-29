@@ -1,4 +1,25 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum AutoRecoverMode {
+    Off,
+    DryRun,
+    On,
+}
+
+impl AutoRecoverMode {
+    pub fn enabled(self) -> bool {
+        !matches!(self, Self::Off)
+    }
+
+    pub fn action(self) -> &'static str {
+        match self {
+            Self::Off => "log_only",
+            Self::DryRun => "would_remediate",
+            Self::On => "remediate",
+        }
+    }
+}
 
 #[derive(Debug, Parser)]
 #[command(
@@ -35,6 +56,10 @@ pub struct Cli {
     #[arg(long = "probe-stuck-sco", value_name = "BOOL", num_args = 0..=1, default_missing_value = "true")]
     pub probe_stuck_sco: Option<bool>,
 
+    /// Auto-recover confirmed stuck-SCO by disconnecting and reconnecting the device
+    #[arg(long = "auto-recover-stuck-sco", value_name = "MODE")]
+    pub auto_recover_stuck_sco: Option<AutoRecoverMode>,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -65,6 +90,7 @@ pub enum Command {
 pub struct Overrides {
     pub preferred_profiles: Option<Vec<String>>,
     pub input_volume: Option<u32>,
+    pub auto_recover_stuck_sco: Option<AutoRecoverMode>,
     pub broken_vendors: Option<Vec<String>>,
     pub debounce_ms: Option<u64>,
     pub probe_stuck_sco: Option<bool>,
@@ -78,6 +104,7 @@ pub fn overrides(cli: &Cli) -> Overrides {
             Some(cli.preferred_profile.clone())
         },
         input_volume: cli.input_volume,
+        auto_recover_stuck_sco: cli.auto_recover_stuck_sco,
         broken_vendors: if cli.broken_vendor.is_empty() {
             None
         } else {

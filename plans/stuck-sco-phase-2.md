@@ -93,16 +93,17 @@ WirePlumber's stock default level is `WARN` (level 2). This means **on a default
 WirePlumber install, the BT_PKT_SEQNUM line never reaches journald** and the
 Tier 1 detector path is unreachable.
 
-The user's machine has `WIREPLUMBER_DEBUG=D` set in their dotfiles (commit
-`f245a2f` 2026-04-19,
+The user's machine originally had `WIREPLUMBER_DEBUG=D` set in their dotfiles
+(commit `f245a2f` 2026-04-19,
 `~/dotfiles/config/systemd-user/wireplumber.service.d/debug.conf`), which is why
-we observed the line at all on the 2026-04-23 16:12 event.
+we observed the line at all on the 2026-04-23 16:12 event. It now uses
+`WIREPLUMBER_DEBUG=I`, which still emits the detector signal without DEBUG-level
+log volume.
 
 The minimum level required for the detector is `WIREPLUMBER_DEBUG=I` (info). `I`
 is sufficient and substantially less noisy than `D`: in the 16:12 capture, INFO
 lines were 1,920 vs DEBUG's 25,068 (~7% of the volume). Recommend `I` to users
-in the README; the user's own dotfiles can stay at `D` if they want it for
-unrelated reasons.
+in the README; DEBUG should only be used for short targeted capture sessions.
 
 To set this:
 

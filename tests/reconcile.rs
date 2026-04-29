@@ -3,11 +3,12 @@ use std::collections::VecDeque;
 use std::time::Duration;
 
 use anyhow::Result;
-use bthman::cli::Overrides;
+use bthman::cli::{AutoRecoverMode, Overrides};
 use bthman::config::Config;
 use bthman::pactl::PactlRunner;
-use bthman::reconcile::reconcile_with;
-use bthman::sco_probe::{ProbeRunner, ProbeState};
+use bthman::reconcile::{reconcile_with, reconcile_with_reconnect};
+use bthman::reconnect::{BluetoothOps, Scheduler};
+use bthman::sco_probe::{ProbeResult, ProbeRunner, ProbeState};
 
 struct NoProbe;
 
@@ -38,25 +39,77 @@ impl ProbeRunner for RecordingProbe {
     }
 }
 
+struct QueueProbe {
+    calls: RefCell<Vec<String>>,
+    responses: RefCell<VecDeque<Option<Vec<u8>>>>,
+}
+
+impl QueueProbe {
+    fn new(responses: Vec<Option<Vec<u8>>>) -> Self {
+        Self {
+            calls: RefCell::new(Vec::new()),
+            responses: RefCell::new(responses.into()),
+        }
+    }
+}
+
+impl ProbeRunner for QueueProbe {
+    fn capture_raw(&self, source: &str, _duration: Duration) -> Option<Vec<u8>> {
+        self.calls.borrow_mut().push(source.to_string());
+        self.responses.borrow_mut().pop_front().flatten()
+    }
+}
+
 struct FakePactl {
     responses: RefCell<VecDeque<(Vec<String>, String)>>,
     calls: RefCell<Vec<Vec<String>>>,
 }
 
+struct FakeBluetooth {
+    disconnects: RefCell<Vec<String>>,
+}
+
+impl FakeBluetooth {
+    fn new() -> Self {
+        Self {
+            disconnects: RefCell::new(Vec::new()),
+        }
+    }
+}
+
+impl BluetoothOps for FakeBluetooth {
+    fn device_is_connected(&self, _addr: &str) -> bool {
+        false
+    }
+
+    fn try_disconnect(&self, addr: &str) -> bool {
+        self.disconnects.borrow_mut().push(addr.to_string());
+        true
+    }
+
+    fn try_reconnect(&self, _addr: &str) -> bool {
+        false
+    }
+}
+
 impl FakePactl {
     fn new(responses: Vec<(Vec<&str>, &str)>) -> Self {
+        Self::new_owned(
+            responses
+                .into_iter()
+                .map(|(args, body)| {
+                    (
+                        args.into_iter().map(String::from).collect(),
+                        body.to_string(),
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    fn new_owned(responses: Vec<(Vec<String>, String)>) -> Self {
         Self {
-            responses: RefCell::new(
-                responses
-                    .into_iter()
-                    .map(|(args, body)| {
-                        (
-                            args.into_iter().map(String::from).collect(),
-                            body.to_string(),
-                        )
-                    })
-                    .collect(),
-            ),
+            responses: RefCell::new(responses.into()),
             calls: RefCell::new(Vec::new()),
         }
     }
@@ -120,6 +173,55 @@ fn base_config(preferred: Vec<&str>) -> Config {
         ..Default::default()
     };
     Config::build(&overrides, None).unwrap()
+}
+
+fn remediation_config(mode: AutoRecoverMode) -> Config {
+    let mut config = base_config(vec!["headset-head-unit"]);
+    config.auto_recover_stuck_sco = mode;
+    config
+}
+
+fn hfp_probe_responses() -> Vec<(Vec<String>, String)> {
+    vec![
+        (
+            vec!["list".into(), "cards".into()],
+            cards_dump("headset-head-unit"),
+        ),
+        (
+            vec!["list".into(), "cards".into(), "short".into()],
+            "42\tbluez_card.AA_BB_CC_DD_EE_FF\tmodule\n".into(),
+        ),
+        (
+            vec!["list".into(), "cards".into(), "short".into()],
+            "42\tbluez_card.AA_BB_CC_DD_EE_FF\tmodule\n".into(),
+        ),
+        (
+            vec!["list".into(), "cards".into(), "short".into()],
+            "42\tbluez_card.AA_BB_CC_DD_EE_FF\tmodule\n".into(),
+        ),
+        (
+            vec!["info".into()],
+            "Default Source: bluez_input.AA:BB:CC:DD:EE:FF\n".into(),
+        ),
+        (
+            vec![
+                "get-source-mute".into(),
+                "bluez_input.AA:BB:CC:DD:EE:FF".into(),
+            ],
+            "Mute: no\n".into(),
+        ),
+        (
+            vec![
+                "get-source-mute".into(),
+                "bluez_input.AA:BB:CC:DD:EE:FF".into(),
+            ],
+            "Mute: no\n".into(),
+        ),
+    ]
+}
+
+fn hfp_fake() -> FakePactl {
+    FakePactl::new_owned(hfp_probe_responses())
 }
 
 #[test]
@@ -424,4 +526,271 @@ fn probe_skipped_when_source_is_muted() {
         probe.calls.borrow().is_empty(),
         "probe must not run on muted source"
     );
+}
+
+#[test]
+fn auto_recover_on_disconnects_and_schedules_when_seqnum_recent() {
+    let fake = FakePactl::new(vec![
+        (vec!["list", "cards"], &cards_dump("headset-head-unit")),
+        (
+            vec!["list", "cards", "short"],
+            "42\tbluez_card.AA_BB_CC_DD_EE_FF\tmodule\n",
+        ),
+        (
+            vec!["list", "cards", "short"],
+            "42\tbluez_card.AA_BB_CC_DD_EE_FF\tmodule\n",
+        ),
+        (
+            vec!["list", "cards", "short"],
+            "42\tbluez_card.AA_BB_CC_DD_EE_FF\tmodule\n",
+        ),
+        (
+            vec!["info"],
+            "Default Source: bluez_input.AA:BB:CC:DD:EE:FF\n",
+        ),
+        (
+            vec!["get-source-mute", "bluez_input.AA:BB:CC:DD:EE:FF"],
+            "Mute: no\n",
+        ),
+        (
+            vec!["get-source-mute", "bluez_input.AA:BB:CC:DD:EE:FF"],
+            "Mute: no\n",
+        ),
+    ]);
+    let probe = RecordingProbe::new(Some(vec![0u8; 16000]));
+    let bluetooth = FakeBluetooth::new();
+    let config = remediation_config(AutoRecoverMode::On);
+    let mut scheduler = Scheduler::new(config.reconnect_backoff.clone());
+    let mut state = ProbeState::new();
+    let now = std::time::Instant::now();
+    state.record_hfp_seen("AA:BB:CC:DD:EE:FF", now - Duration::from_secs(11));
+    state.record_seqnum_failure(now);
+
+    reconcile_with_reconnect(
+        &fake,
+        &probe,
+        &mut state,
+        &bluetooth,
+        &mut scheduler,
+        &|| false,
+        &|| {},
+        &config,
+        "test",
+    )
+    .unwrap();
+
+    assert_eq!(
+        bluetooth.disconnects.borrow().as_slice(),
+        &["AA:BB:CC:DD:EE:FF".to_string()]
+    );
+    assert!(!scheduler.is_empty());
+    assert!(state.is_remediation_in_progress("bluez_input.AA:BB:CC:DD:EE:FF"));
+}
+
+#[test]
+fn auto_recover_dry_run_does_not_disconnect() {
+    let fake = FakePactl::new(vec![
+        (vec!["list", "cards"], &cards_dump("headset-head-unit")),
+        (
+            vec!["list", "cards", "short"],
+            "42\tbluez_card.AA_BB_CC_DD_EE_FF\tmodule\n",
+        ),
+        (
+            vec!["list", "cards", "short"],
+            "42\tbluez_card.AA_BB_CC_DD_EE_FF\tmodule\n",
+        ),
+        (
+            vec!["list", "cards", "short"],
+            "42\tbluez_card.AA_BB_CC_DD_EE_FF\tmodule\n",
+        ),
+        (
+            vec!["info"],
+            "Default Source: bluez_input.AA:BB:CC:DD:EE:FF\n",
+        ),
+        (
+            vec!["get-source-mute", "bluez_input.AA:BB:CC:DD:EE:FF"],
+            "Mute: no\n",
+        ),
+        (
+            vec!["get-source-mute", "bluez_input.AA:BB:CC:DD:EE:FF"],
+            "Mute: no\n",
+        ),
+    ]);
+    let probe = RecordingProbe::new(Some(vec![0u8; 16000]));
+    let bluetooth = FakeBluetooth::new();
+    let config = remediation_config(AutoRecoverMode::DryRun);
+    let mut scheduler = Scheduler::new(config.reconnect_backoff.clone());
+    let mut state = ProbeState::new();
+    let now = std::time::Instant::now();
+    state.record_hfp_seen("AA:BB:CC:DD:EE:FF", now - Duration::from_secs(11));
+    state.record_seqnum_failure(now);
+
+    reconcile_with_reconnect(
+        &fake,
+        &probe,
+        &mut state,
+        &bluetooth,
+        &mut scheduler,
+        &|| false,
+        &|| {},
+        &config,
+        "test",
+    )
+    .unwrap();
+
+    assert!(bluetooth.disconnects.borrow().is_empty());
+    assert!(scheduler.is_empty());
+    assert!(!state.is_remediation_in_progress("bluez_input.AA:BB:CC:DD:EE:FF"));
+}
+
+#[test]
+fn auto_recover_tier_2_disconnects_after_second_all_zero() {
+    let mut responses = hfp_probe_responses();
+    responses.extend(hfp_probe_responses());
+    let fake = FakePactl::new_owned(responses);
+    let probe = QueueProbe::new(vec![Some(vec![0u8; 16000]), Some(vec![0u8; 16000])]);
+    let bluetooth = FakeBluetooth::new();
+    let config = remediation_config(AutoRecoverMode::On);
+    let mut scheduler = Scheduler::new(config.reconnect_backoff.clone());
+    let mut state = ProbeState::new();
+    let now = std::time::Instant::now();
+    state.record_hfp_seen("AA:BB:CC:DD:EE:FF", now - Duration::from_secs(11));
+
+    reconcile_with_reconnect(
+        &fake,
+        &probe,
+        &mut state,
+        &bluetooth,
+        &mut scheduler,
+        &|| false,
+        &|| {},
+        &config,
+        "first",
+    )
+    .unwrap();
+    assert!(bluetooth.disconnects.borrow().is_empty());
+
+    state.record_probe(
+        "bluez_input.AA:BB:CC:DD:EE:FF",
+        &ProbeResult::AllZero,
+        std::time::Instant::now() - Duration::from_secs(2),
+    );
+    reconcile_with_reconnect(
+        &fake,
+        &probe,
+        &mut state,
+        &bluetooth,
+        &mut scheduler,
+        &|| false,
+        &|| {},
+        &config,
+        "follow_up_probe",
+    )
+    .unwrap();
+
+    assert_eq!(
+        bluetooth.disconnects.borrow().as_slice(),
+        &["AA:BB:CC:DD:EE:FF".to_string()]
+    );
+    assert!(!scheduler.is_empty());
+}
+
+#[test]
+fn auto_recover_skips_when_hfp_uptime_is_too_short() {
+    let fake = hfp_fake();
+    let probe = RecordingProbe::new(Some(vec![0u8; 16000]));
+    let bluetooth = FakeBluetooth::new();
+    let config = remediation_config(AutoRecoverMode::On);
+    let mut scheduler = Scheduler::new(config.reconnect_backoff.clone());
+    let mut state = ProbeState::new();
+    let now = std::time::Instant::now();
+    state.record_hfp_seen("AA:BB:CC:DD:EE:FF", now - Duration::from_secs(9));
+    state.record_seqnum_failure(now);
+
+    reconcile_with_reconnect(
+        &fake,
+        &probe,
+        &mut state,
+        &bluetooth,
+        &mut scheduler,
+        &|| false,
+        &|| {},
+        &config,
+        "test",
+    )
+    .unwrap();
+
+    assert!(bluetooth.disconnects.borrow().is_empty());
+    assert!(scheduler.is_empty());
+}
+
+#[test]
+fn auto_recover_rate_limits_repeated_remediation() {
+    let fake = hfp_fake();
+    let probe = RecordingProbe::new(Some(vec![0u8; 16000]));
+    let bluetooth = FakeBluetooth::new();
+    let config = remediation_config(AutoRecoverMode::On);
+    let mut scheduler = Scheduler::new(config.reconnect_backoff.clone());
+    let mut state = ProbeState::new();
+    let now = std::time::Instant::now();
+    state.record_hfp_seen("AA:BB:CC:DD:EE:FF", now - Duration::from_secs(11));
+    state.record_remediation("AA:BB:CC:DD:EE:FF", now);
+    state.record_seqnum_failure(now);
+
+    reconcile_with_reconnect(
+        &fake,
+        &probe,
+        &mut state,
+        &bluetooth,
+        &mut scheduler,
+        &|| false,
+        &|| {},
+        &config,
+        "test",
+    )
+    .unwrap();
+
+    assert!(bluetooth.disconnects.borrow().is_empty());
+    assert!(scheduler.is_empty());
+}
+
+#[test]
+fn source_change_trigger_bypasses_probe_cooldown() {
+    let mut responses = hfp_probe_responses();
+    responses.extend(hfp_probe_responses());
+    let fake = FakePactl::new_owned(responses);
+    let probe = QueueProbe::new(vec![Some(vec![1u8; 16000]), Some(vec![1u8; 16000])]);
+    let config = remediation_config(AutoRecoverMode::DryRun);
+    let bluetooth = FakeBluetooth::new();
+    let mut scheduler = Scheduler::new(config.reconnect_backoff.clone());
+    let mut state = ProbeState::new();
+    let now = std::time::Instant::now();
+    state.record_hfp_seen("AA:BB:CC:DD:EE:FF", now - Duration::from_secs(11));
+
+    reconcile_with_reconnect(
+        &fake,
+        &probe,
+        &mut state,
+        &bluetooth,
+        &mut scheduler,
+        &|| false,
+        &|| {},
+        &config,
+        "startup",
+    )
+    .unwrap();
+    reconcile_with_reconnect(
+        &fake,
+        &probe,
+        &mut state,
+        &bluetooth,
+        &mut scheduler,
+        &|| false,
+        &|| {},
+        &config,
+        "Event 'change' on source #160",
+    )
+    .unwrap();
+
+    assert_eq!(probe.calls.borrow().len(), 2);
 }

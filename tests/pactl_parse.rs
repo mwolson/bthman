@@ -55,12 +55,14 @@ fn event_formatted_includes_index_when_present() {
 }
 
 #[test]
-fn is_interesting_card_and_server_only() {
+fn is_interesting_card_server_and_source_only() {
     let card = PactlEvent::parse(r#"{"event":"change","on":"card","index":1}"#).unwrap();
     let server = PactlEvent::parse(r#"{"event":"change","on":"server"}"#).unwrap();
+    let source = PactlEvent::parse(r#"{"event":"change","on":"source","index":1}"#).unwrap();
     let sink = PactlEvent::parse(r#"{"event":"change","on":"sink","index":1}"#).unwrap();
     assert!(is_interesting(&card));
     assert!(is_interesting(&server));
+    assert!(is_interesting(&source));
     assert!(!is_interesting(&sink));
 }
 

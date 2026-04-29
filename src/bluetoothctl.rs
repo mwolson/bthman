@@ -70,8 +70,16 @@ pub fn snapshot_connected_audio_devices() -> HashSet<String> {
 }
 
 pub fn try_reconnect(addr: &str, timeout: Duration) -> bool {
+    run_bluetoothctl_with_timeout("connect", addr, timeout, "Reconnect")
+}
+
+pub fn try_disconnect(addr: &str, timeout: Duration) -> bool {
+    run_bluetoothctl_with_timeout("disconnect", addr, timeout, "Disconnect")
+}
+
+fn run_bluetoothctl_with_timeout(action: &str, addr: &str, timeout: Duration, label: &str) -> bool {
     let mut child = match Command::new("bluetoothctl")
-        .args(["connect", addr])
+        .args([action, addr])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -89,7 +97,7 @@ pub fn try_reconnect(addr: &str, timeout: Duration) -> bool {
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            info!("Reconnect to {} timed out", addr);
+            info!("{} {} timed out", label, addr);
             return false;
         }
         std::thread::sleep(Duration::from_millis(100));

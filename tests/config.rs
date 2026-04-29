@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use bthman::cli::Overrides;
+use bthman::cli::{AutoRecoverMode, Overrides};
 use bthman::config::{parse_conf, Config};
 use tempfile::TempDir;
 
@@ -14,6 +14,7 @@ fn parse_conf_accepts_values_blanks_and_comments() {
 
 # another comment
 --broken-vendor=0e8d
+--auto-recover-stuck-sco=dry-run
 --debounce-ms=250
 ";
     let entries = parse_conf(text, Path::new("conf")).unwrap();
@@ -26,6 +27,7 @@ fn parse_conf_accepts_values_blanks_and_comments() {
             ),
             ("--input-volume".into(), "85".into()),
             ("--broken-vendor".into(), "0e8d".into()),
+            ("--auto-recover-stuck-sco".into(), "dry-run".into()),
             ("--debounce-ms".into(), "250".into()),
         ]
     );
@@ -134,4 +136,20 @@ fn config_build_missing_file_uses_defaults() {
     let config = Config::build(&overrides, Some(&conf)).unwrap();
     assert_eq!(config.input_volume, 100);
     assert_eq!(config.debounce, Duration::from_millis(500));
+}
+
+#[test]
+fn config_build_parses_auto_recover_mode() {
+    let dir = TempDir::new().unwrap();
+    let conf = dir.path().join("bthman.conf");
+    std::fs::write(&conf, "--auto-recover-stuck-sco=dry-run\n").unwrap();
+    let config = Config::build(&Overrides::default(), Some(&conf)).unwrap();
+    assert_eq!(config.auto_recover_stuck_sco, AutoRecoverMode::DryRun);
+
+    let overrides = Overrides {
+        auto_recover_stuck_sco: Some(AutoRecoverMode::On),
+        ..Default::default()
+    };
+    let config = Config::build(&overrides, Some(&conf)).unwrap();
+    assert_eq!(config.auto_recover_stuck_sco, AutoRecoverMode::On);
 }

@@ -5,13 +5,14 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context, Result};
 use regex::Regex;
 
-use crate::cli::Overrides;
+use crate::cli::{AutoRecoverMode, Overrides};
 use crate::vendor_detect;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     pub preferred_profiles: Vec<String>,
     pub input_volume: u32,
+    pub auto_recover_stuck_sco: AutoRecoverMode,
     pub broken_vendors: HashSet<String>,
     pub debounce: Duration,
     pub probe_stuck_sco: bool,
@@ -25,6 +26,7 @@ impl Default for Config {
         Self {
             preferred_profiles: vec!["headset-head-unit".into(), "headset-head-unit-msbc".into()],
             input_volume: 100,
+            auto_recover_stuck_sco: AutoRecoverMode::Off,
             broken_vendors: ["0e8d".into()].into_iter().collect(),
             debounce: Duration::from_millis(500),
             probe_stuck_sco: true,
@@ -76,6 +78,9 @@ impl Config {
         if let Some(volume) = overrides.input_volume {
             self.input_volume = volume;
         }
+        if let Some(mode) = overrides.auto_recover_stuck_sco {
+            self.auto_recover_stuck_sco = mode;
+        }
         if let Some(vendors) = &overrides.broken_vendors {
             self.broken_vendors = vendors.iter().map(|v| v.to_lowercase()).collect();
         }
@@ -101,6 +106,15 @@ impl Config {
             "--input-volume" => {
                 self.input_volume = value.parse().map_err(|_| {
                     anyhow!("invalid --input-volume in {}: {}", path.display(), value)
+                })?;
+            }
+            "--auto-recover-stuck-sco" => {
+                self.auto_recover_stuck_sco = parse_auto_recover_mode(value).ok_or_else(|| {
+                    anyhow!(
+                        "invalid --auto-recover-stuck-sco in {} (expected off/dry-run/on): {}",
+                        path.display(),
+                        value
+                    )
                 })?;
             }
             "--preferred-profile" => {
@@ -136,6 +150,15 @@ fn parse_bool(value: &str) -> Option<bool> {
     match value.to_lowercase().as_str() {
         "true" | "yes" | "1" | "on" => Some(true),
         "false" | "no" | "0" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+fn parse_auto_recover_mode(value: &str) -> Option<AutoRecoverMode> {
+    match value.to_lowercase().as_str() {
+        "false" | "no" | "0" | "off" => Some(AutoRecoverMode::Off),
+        "dry-run" | "dry_run" => Some(AutoRecoverMode::DryRun),
+        "true" | "yes" | "1" | "on" => Some(AutoRecoverMode::On),
         _ => None,
     }
 }

@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::time::{Duration, Instant};
 
 use bthman::sco_probe::{
-    bytes_for_duration, classify, probe_source, ProbeResult, ProbeRunner, ProbeState,
+    bytes_for_duration, classify, probe_source, ProbeAction, ProbeResult, ProbeRunner, ProbeState,
     DEFAULT_PROBE_DURATION,
 };
 
@@ -119,6 +119,23 @@ fn probe_state_blocks_second_probe_within_cooldown() {
 }
 
 #[test]
+fn probe_state_force_bypasses_cooldown() {
+    let mut state = ProbeState::new();
+    let t0 = Instant::now();
+    let source = "bluez_input.AA:BB:CC:DD:EE:FF";
+    assert!(state.should_probe(source, t0, Duration::from_secs(20)));
+    assert_eq!(
+        state.next_action_with_force(
+            source,
+            t0 + Duration::from_secs(5),
+            Duration::from_secs(20),
+            true
+        ),
+        ProbeAction::Probe
+    );
+}
+
+#[test]
 fn probe_state_allows_second_probe_after_cooldown() {
     let mut state = ProbeState::new();
     let t0 = Instant::now();
@@ -146,4 +163,53 @@ fn probe_state_tracks_sources_independently() {
         now,
         Duration::from_secs(20)
     ));
+}
+
+#[test]
+fn all_zero_arms_follow_up_wakeup() {
+    let mut state = ProbeState::new();
+    let t0 = Instant::now();
+    state.record_probe("bluez_input.AA:BB:CC:DD:EE:FF", &ProbeResult::AllZero, t0);
+    assert_eq!(
+        state.next_action(
+            "bluez_input.AA:BB:CC:DD:EE:FF",
+            t0 + Duration::from_secs(2),
+            Duration::from_secs(20)
+        ),
+        ProbeAction::FollowUpProbe
+    );
+    assert_eq!(
+        state.next_wakeup(t0 + Duration::from_secs(1)),
+        Some(Duration::from_secs(1))
+    );
+}
+
+#[test]
+fn has_signal_clears_follow_up() {
+    let mut state = ProbeState::new();
+    let t0 = Instant::now();
+    let source = "bluez_input.AA:BB:CC:DD:EE:FF";
+    state.record_probe(source, &ProbeResult::AllZero, t0);
+    state.record_probe(source, &ProbeResult::HasSignal, t0 + Duration::from_secs(1));
+    assert_eq!(state.next_wakeup(t0 + Duration::from_secs(1)), None);
+    assert!(!state.prior_all_zero_recent(source, t0 + Duration::from_secs(1)));
+}
+
+#[test]
+fn seqnum_recent_expires_after_window() {
+    let mut state = ProbeState::new();
+    let t0 = Instant::now();
+    state.record_seqnum_failure(t0);
+    assert!(state.seqnum_recent(t0 + Duration::from_secs(5)));
+    assert!(!state.seqnum_recent(t0 + Duration::from_secs(6)));
+}
+
+#[test]
+fn remediation_in_progress_is_visible_by_source() {
+    let mut state = ProbeState::new();
+    let source = "bluez_input.AA:BB:CC:DD:EE:FF";
+    state.set_remediation_in_progress(source);
+    assert!(state.is_remediation_in_progress(source));
+    state.clear_remediation_in_progress_for_addr("AA:BB:CC:DD:EE:FF");
+    assert!(!state.is_remediation_in_progress(source));
 }

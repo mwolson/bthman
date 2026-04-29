@@ -5,6 +5,7 @@ use tracing::info;
 
 pub trait BluetoothOps {
     fn device_is_connected(&self, addr: &str) -> bool;
+    fn try_disconnect(&self, addr: &str) -> bool;
     fn try_reconnect(&self, addr: &str) -> bool;
 }
 
@@ -17,9 +18,19 @@ impl BluetoothOps for RealOps {
         crate::bluetoothctl::device_is_connected(addr)
     }
 
+    fn try_disconnect(&self, addr: &str) -> bool {
+        crate::bluetoothctl::try_disconnect(addr, self.reconnect_timeout)
+    }
+
     fn try_reconnect(&self, addr: &str) -> bool {
         crate::bluetoothctl::try_reconnect(addr, self.reconnect_timeout)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Completion {
+    Connected { addr: String },
+    Exhausted { addr: String, attempts: usize },
 }
 
 #[derive(Debug, Clone)]
@@ -31,6 +42,7 @@ struct Task {
 pub struct Scheduler {
     tasks: HashMap<String, Task>,
     backoff: Vec<Duration>,
+    completed: Vec<Completion>,
 }
 
 impl Scheduler {
@@ -38,6 +50,7 @@ impl Scheduler {
         Self {
             tasks: HashMap::new(),
             backoff,
+            completed: Vec::new(),
         }
     }
 
@@ -75,6 +88,7 @@ impl Scheduler {
             if ops.device_is_connected(&addr) {
                 info!("Reconnect: {} is back, dropping retry", addr);
                 self.tasks.remove(&addr);
+                self.completed.push(Completion::Connected { addr });
                 continue;
             }
             let attempt = task.attempt;
@@ -87,6 +101,7 @@ impl Scheduler {
             let ok = ops.try_reconnect(&addr);
             if ok && ops.device_is_connected(&addr) {
                 self.tasks.remove(&addr);
+                self.completed.push(Completion::Connected { addr });
                 continue;
             }
             let next_attempt = attempt + 1;
@@ -97,6 +112,10 @@ impl Scheduler {
                     self.backoff.len()
                 );
                 self.tasks.remove(&addr);
+                self.completed.push(Completion::Exhausted {
+                    addr,
+                    attempts: self.backoff.len(),
+                });
                 continue;
             }
             let delta = self
@@ -113,5 +132,9 @@ impl Scheduler {
                 },
             );
         }
+    }
+
+    pub fn take_completed(&mut self) -> Vec<Completion> {
+        std::mem::take(&mut self.completed)
     }
 }

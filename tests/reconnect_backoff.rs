@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use bthman::reconnect::{BluetoothOps, Scheduler};
+use bthman::reconnect::{BluetoothOps, Completion, Scheduler};
 
 struct FakeOps {
     attempts: AtomicUsize,
@@ -24,6 +24,10 @@ impl FakeOps {
 impl BluetoothOps for FakeOps {
     fn device_is_connected(&self, _addr: &str) -> bool {
         self.connected
+    }
+
+    fn try_disconnect(&self, _addr: &str) -> bool {
+        true
     }
 
     fn try_reconnect(&self, _addr: &str) -> bool {
@@ -91,6 +95,12 @@ fn reconnect_stops_when_device_returns() {
     sched.process(t0, &ops);
     assert_eq!(ops.attempts(), 0);
     assert!(sched.is_empty());
+    assert_eq!(
+        sched.take_completed(),
+        vec![Completion::Connected {
+            addr: "AA:BB:CC:DD:EE:FF".to_string()
+        }]
+    );
 }
 
 #[test]
@@ -108,4 +118,23 @@ fn multiple_addresses_tracked_independently() {
     sched.process(t0, &ops);
     assert_eq!(ops.attempts(), 2);
     assert!(!sched.is_empty());
+}
+
+#[test]
+fn scheduler_reports_exhausted_completion() {
+    let mut sched = Scheduler::new(vec![Duration::ZERO]);
+    let ops = FakeOps::new(false);
+    let t0 = Instant::now();
+    sched.schedule(t0, std::iter::once("AA:BB:CC:DD:EE:FF".to_string()));
+
+    sched.process(t0, &ops);
+
+    assert_eq!(
+        sched.take_completed(),
+        vec![Completion::Exhausted {
+            addr: "AA:BB:CC:DD:EE:FF".to_string(),
+            attempts: 1
+        }]
+    );
+    assert!(sched.take_completed().is_empty());
 }

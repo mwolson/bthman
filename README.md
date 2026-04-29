@@ -153,10 +153,11 @@ These flags apply to the daemon and to `--once`. They can also be set in the
 config file, one per line.
 
 ```text
---preferred-profile=PROFILE   Repeatable. Profile priority order.
---input-volume=N              Mic volume target percent (default: 100).
+--auto-recover-stuck-sco=MODE off, dry-run, or on (default: off).
 --broken-vendor=HEX           Repeatable. USB vendor IDs for which to skip LC3.
 --debounce-ms=N               Event debounce window in ms (default: 500).
+--input-volume=N              Mic volume target percent (default: 100).
+--preferred-profile=PROFILE   Repeatable. Profile priority order.
 --probe-stuck-sco=BOOL        Enable the stuck-SCO probe (default: true).
 ```
 
@@ -173,8 +174,20 @@ When `--probe-stuck-sco=true` (the default), the daemon runs a short `parecord`
 capture after each reconcile pass whenever a bluez card is on an HFP profile and
 its source is not muted. A per-source 20s cooldown prevents rapid events from
 triggering back-to-back probes. If the capture is bit-exact zero, the daemon
-logs a warning identifying the stuck source. The daemon does not currently
-auto-reconnect; that remediation is a follow-up.
+logs a warning identifying the stuck source.
+
+By default, detection is log-only. With `--auto-recover-stuck-sco=dry-run`, the
+daemon logs the remediation decision and trips the rate limiter without touching
+the Bluetooth connection. With `--auto-recover-stuck-sco=on`, confirmed stuck
+SCO disconnects the device and schedules reconnect through the daemon's existing
+backoff path. Confirmation requires either an all-zero capture plus a recent
+WirePlumber `BT_PKT_SEQNUM` failure, or two all-zero captures within 3 seconds.
+Auto-recovery is not systemd-only: hosts without journald, such as OpenRC
+systems, use the two-probe confirmation path. The faster Tier 1 path requires
+the WirePlumber journal log line, which is emitted at INFO level. On systemd
+user services, set `WIREPLUMBER_DEBUG=I`; DEBUG is not required and is noisy
+enough to make unrelated audio scheduling problems harder to diagnose. Hosts
+without that log path fall back to Tier 2.
 
 `parecord` is a soft dependency: if it is missing from PATH, the probe is
 disabled and a warning is logged at startup.
