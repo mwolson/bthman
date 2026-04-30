@@ -225,9 +225,23 @@ fn hfp_fake() -> FakePactl {
 }
 
 #[test]
-fn skips_when_external_recorder_active() {
-    let fake = FakePactl::new(vec![]);
-    let config = test_config(vec!["headset-head-unit"]);
+fn corrects_profile_when_external_recorder_active() {
+    let fake = FakePactl::new(vec![
+        (vec!["list", "cards"], &cards_dump("headset-head-unit")),
+        (
+            vec!["list", "cards", "short"],
+            "42\tbluez_card.AA_BB_CC_DD_EE_FF\tmodule\n",
+        ),
+        (
+            vec![
+                "set-card-profile",
+                "bluez_card.AA_BB_CC_DD_EE_FF",
+                "headset-head-unit-msbc",
+            ],
+            "",
+        ),
+    ]);
+    let config = test_config(vec!["headset-head-unit-msbc"]);
     reconcile_with(
         &fake,
         &NoProbe,
@@ -238,7 +252,12 @@ fn skips_when_external_recorder_active() {
         "test",
     )
     .unwrap();
-    assert!(fake.calls.borrow().is_empty());
+    assert!(fake.has_call(&[
+        "set-card-profile",
+        "bluez_card.AA_BB_CC_DD_EE_FF",
+        "headset-head-unit-msbc"
+    ]));
+    assert!(!fake.has_call(&["info"]));
 }
 
 #[test]

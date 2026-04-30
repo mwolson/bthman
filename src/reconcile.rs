@@ -91,10 +91,6 @@ pub fn reconcile_with_reconnect(
     trigger: &str,
 ) -> Result<()> {
     info!("Reconciling: {}", trigger);
-    if recorder_active() {
-        info!("External recorder active, skipping reconciliation");
-        return Ok(());
-    }
     let cards_dump = runner.run(&["list", "cards"])?;
     let mut changed = false;
     for card in pactl::list_bluetooth_cards(runner)? {
@@ -104,6 +100,10 @@ pub fn reconcile_with_reconnect(
     }
     if changed {
         post_change();
+    }
+    if recorder_active() {
+        info!("External recorder active, skipping source and probe reconciliation");
+        return Ok(());
     }
     if pactl::fix_default_source(runner, &cards_dump, config.input_volume)? {
         changed = true;
