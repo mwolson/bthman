@@ -28,10 +28,6 @@ impl AutoRecoverMode {
     about = "Manage Bluetooth HFP profile selection and reconnect headsets after resume"
 )]
 pub struct Cli {
-    /// Watch for PulseAudio events and reconcile continuously (default)
-    #[arg(long)]
-    pub watch: bool,
-
     /// Preferred HFP profile in priority order (repeatable)
     #[arg(long = "preferred-profile", value_name = "PROFILE")]
     pub preferred_profile: Vec<String>,
