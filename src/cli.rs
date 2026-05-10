@@ -28,10 +28,6 @@ impl AutoRecoverMode {
     about = "Manage Bluetooth HFP profile selection and reconnect headsets after resume"
 )]
 pub struct Cli {
-    /// Reconcile profiles once and exit
-    #[arg(long, conflicts_with = "watch")]
-    pub once: bool,
-
     /// Watch for PulseAudio events and reconcile continuously (default)
     #[arg(long)]
     pub watch: bool,
@@ -68,6 +64,8 @@ pub struct Cli {
 pub enum Command {
     /// Install and enable the service (systemd or OpenRC)
     InstallService,
+    /// Reconcile profiles once and exit
+    Once,
     /// Probe Bluetooth HFP sources for stuck-SCO silence and exit
     ///
     /// Bypasses the daemon's auto-probe gating: fires even when no application

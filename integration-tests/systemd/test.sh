@@ -70,8 +70,8 @@ run_test "service is enabled" \
 
 echo ""
 echo "Once mode:"
-run_test "run --once exits cleanly" \
-    'bthman --once'
+run_test "run once exits cleanly" \
+    'bthman once'
 run_test "pactl calls were recorded" \
     'test -s '"$BTHMAN_TEST_SENTINEL"'/pactl-calls.log'
 

@@ -133,8 +133,8 @@ rc-service bthman status
 
 ```text
 bthman                    Run as a daemon (default)
-bthman --once             Reconcile once and exit
 bthman install-service    Install and enable the service (systemd or OpenRC)
+bthman once               Reconcile once and exit
 bthman probe              Probe HFP sources for stuck-SCO silence and exit
 bthman uninstall-service  Disable and remove the service (systemd or OpenRC)
 ```
@@ -149,7 +149,7 @@ samples, which would read as a false positive).
 
 ### Daemon options
 
-These flags apply to the daemon and to `--once`. They can also be set in the
+These flags apply to the daemon and to `once`. They can also be set in the
 config file, one per line.
 
 ```text

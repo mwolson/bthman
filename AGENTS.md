@@ -88,7 +88,7 @@ shell out to fake binaries under `integration-tests/shared/`.
 
 ```sh
 cargo build --release            # produces target/release/bthman
-cargo run -- --once              # reconcile once against the live system
+cargo run -- once                # reconcile once against the live system
 cargo run                        # run as daemon (default)
 ```
 

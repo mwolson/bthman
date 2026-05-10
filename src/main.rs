@@ -18,23 +18,27 @@ fn main() {
 fn dispatch(parsed: cli::Cli) -> Result<()> {
     match &parsed.command {
         Some(cli::Command::InstallService) => service::install(),
+        Some(cli::Command::Once) => run_once(parsed),
         Some(cli::Command::Probe {
             source,
             duration_ms,
         }) => probe_cmd::run_manual_probe(source.as_deref(), *duration_ms),
         Some(cli::Command::UninstallService) => service::uninstall(),
-        None => run_daemon(parsed),
+        None => run_watch(parsed),
     }
 }
 
-fn run_daemon(parsed: cli::Cli) -> Result<()> {
+fn run_once(parsed: cli::Cli) -> Result<()> {
+    deps::check_required()?;
+    let cli_config = cli::overrides(&parsed);
+    let config = config::Config::build(&cli_config, config::default_conf_path().as_deref())?;
+    daemon::run_once(&config)
+}
+
+fn run_watch(parsed: cli::Cli) -> Result<()> {
     deps::check_required()?;
     let cli_config = cli::overrides(&parsed);
     let config = config::Config::build(&cli_config, config::default_conf_path().as_deref())?;
     let sigs = signals::install()?;
-    if parsed.once {
-        daemon::run_once(&config)
-    } else {
-        daemon::run_watch(config, cli_config, sigs)
-    }
+    daemon::run_watch(config, cli_config, sigs)
 }
