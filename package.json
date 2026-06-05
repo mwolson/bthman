@@ -2,7 +2,7 @@
   "license": "MIT",
   "name": "bthman",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "scripts": {
     "build": "cargo build --release",
     "clippy": "cargo clippy --all-targets -- -D warnings",
