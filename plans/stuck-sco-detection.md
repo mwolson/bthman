@@ -222,10 +222,13 @@ discovery.
 
 ## Phase 2 (out of this PR)
 
+Superseded by `plans/stuck-sco-phase-2.md`; auto-recovery now defaults to `on`
+and can be disabled with `--auto-recover-stuck-sco=off`.
+
 Once the phase 1 logs look clean, add:
 
 - Two-probe confirmation with N-second gap (state tracked on the card)
-- `--auto-recover-stuck-sco` config flag (default off)
+- `--auto-recover-stuck-sco` config flag
 - Rate limiting: at most one auto-recovery per device per 5 minutes
 - Minimum link uptime before allowing a recovery, to prevent loops on
   hard-broken devices
@@ -244,7 +247,7 @@ Once the phase 1 logs look clean, add:
   consider: (a) treat a `BT_PKT_SEQNUM` log plus a single all-zero capture as
   sufficient evidence, skipping the second probe when the secondary signal is
   present; (b) keep two-probe but with a tight ~2-second gap; (c) probe
-  aggressively (e.g., every 2s) for the first 10s after HFP activates and then
+  aggressively (e.g., every 2s) for the first 3s after HFP activates and then
   fall back to the cooldown. Option (a) is the most attractive given the
   BT_PKT_SEQNUM correlation from the same event.
 

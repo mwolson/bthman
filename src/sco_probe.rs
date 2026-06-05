@@ -12,7 +12,7 @@ pub const DEFAULT_PROBE_DURATION: Duration = Duration::from_millis(500);
 pub const DEFAULT_PROBE_COOLDOWN: Duration = Duration::from_secs(20);
 pub const FOLLOW_UP_DELAY: Duration = Duration::from_secs(2);
 pub const FOLLOW_UP_WINDOW: Duration = Duration::from_secs(3);
-pub const MIN_HFP_UPTIME: Duration = Duration::from_secs(10);
+pub const MIN_HFP_UPTIME: Duration = Duration::from_secs(3);
 pub const REMEDIATION_RATE_LIMIT: Duration = Duration::from_secs(300);
 pub const SEQNUM_WINDOW: Duration = Duration::from_secs(5);
 

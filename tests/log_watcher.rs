@@ -22,6 +22,12 @@ fn unrelated_line_emits_no_event() {
 #[test]
 fn level_probe_accepts_info_or_debug() {
     assert!(level_adequate(
+        r#"{"PRIORITY":"6","MESSAGE":"s-node: saving stream props"}"#
+    ));
+    assert!(level_adequate(
+        r#"{"PRIORITY":"7","MESSAGE":"spa.bluez5: ready"}"#
+    ));
+    assert!(level_adequate(
         "Apr 26 host wireplumber[1]: I spa.bluez5: ready\n"
     ));
     assert!(level_adequate(
@@ -31,6 +37,10 @@ fn level_probe_accepts_info_or_debug() {
 
 #[test]
 fn level_probe_rejects_warn_and_error_only() {
+    assert!(!level_adequate(
+        r#"{"PRIORITY":"4","MESSAGE":"spa.bluez5: warn"}
+{"PRIORITY":"3","MESSAGE":"spa.bluez5: error"}"#
+    ));
     assert!(!level_adequate(
         "Apr 26 host wireplumber[1]: W spa.bluez5: warn\nApr 26 host wireplumber[1]: E spa.bluez5: error\n"
     ));

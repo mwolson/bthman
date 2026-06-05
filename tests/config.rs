@@ -134,6 +134,7 @@ fn config_build_missing_file_uses_defaults() {
         ..Default::default()
     };
     let config = Config::build(&overrides, Some(&conf)).unwrap();
+    assert_eq!(config.auto_recover_stuck_sco, AutoRecoverMode::On);
     assert_eq!(config.input_volume, 100);
     assert_eq!(config.debounce, Duration::from_millis(500));
 }

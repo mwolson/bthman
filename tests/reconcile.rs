@@ -582,7 +582,7 @@ fn auto_recover_on_disconnects_and_schedules_when_seqnum_recent() {
     let mut scheduler = Scheduler::new(config.reconnect_backoff.clone());
     let mut state = ProbeState::new();
     let now = std::time::Instant::now();
-    state.record_hfp_seen("AA:BB:CC:DD:EE:FF", now - Duration::from_secs(11));
+    state.record_hfp_seen("AA:BB:CC:DD:EE:FF", now - Duration::from_secs(4));
     state.record_seqnum_failure(now);
 
     reconcile_with_reconnect(
@@ -641,7 +641,7 @@ fn auto_recover_dry_run_does_not_disconnect() {
     let mut scheduler = Scheduler::new(config.reconnect_backoff.clone());
     let mut state = ProbeState::new();
     let now = std::time::Instant::now();
-    state.record_hfp_seen("AA:BB:CC:DD:EE:FF", now - Duration::from_secs(11));
+    state.record_hfp_seen("AA:BB:CC:DD:EE:FF", now - Duration::from_secs(4));
     state.record_seqnum_failure(now);
 
     reconcile_with_reconnect(
@@ -673,7 +673,7 @@ fn auto_recover_tier_2_disconnects_after_second_all_zero() {
     let mut scheduler = Scheduler::new(config.reconnect_backoff.clone());
     let mut state = ProbeState::new();
     let now = std::time::Instant::now();
-    state.record_hfp_seen("AA:BB:CC:DD:EE:FF", now - Duration::from_secs(11));
+    state.record_hfp_seen("AA:BB:CC:DD:EE:FF", now - Duration::from_secs(4));
 
     reconcile_with_reconnect(
         &fake,
@@ -723,7 +723,7 @@ fn auto_recover_skips_when_hfp_uptime_is_too_short() {
     let mut scheduler = Scheduler::new(config.reconnect_backoff.clone());
     let mut state = ProbeState::new();
     let now = std::time::Instant::now();
-    state.record_hfp_seen("AA:BB:CC:DD:EE:FF", now - Duration::from_secs(9));
+    state.record_hfp_seen("AA:BB:CC:DD:EE:FF", now - Duration::from_secs(2));
     state.record_seqnum_failure(now);
 
     reconcile_with_reconnect(
@@ -752,7 +752,7 @@ fn auto_recover_rate_limits_repeated_remediation() {
     let mut scheduler = Scheduler::new(config.reconnect_backoff.clone());
     let mut state = ProbeState::new();
     let now = std::time::Instant::now();
-    state.record_hfp_seen("AA:BB:CC:DD:EE:FF", now - Duration::from_secs(11));
+    state.record_hfp_seen("AA:BB:CC:DD:EE:FF", now - Duration::from_secs(4));
     state.record_remediation("AA:BB:CC:DD:EE:FF", now);
     state.record_seqnum_failure(now);
 
@@ -784,7 +784,7 @@ fn source_change_trigger_bypasses_probe_cooldown() {
     let mut scheduler = Scheduler::new(config.reconnect_backoff.clone());
     let mut state = ProbeState::new();
     let now = std::time::Instant::now();
-    state.record_hfp_seen("AA:BB:CC:DD:EE:FF", now - Duration::from_secs(11));
+    state.record_hfp_seen("AA:BB:CC:DD:EE:FF", now - Duration::from_secs(4));
 
     reconcile_with_reconnect(
         &fake,

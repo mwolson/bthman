@@ -5,6 +5,7 @@ use std::thread;
 
 use anyhow::{Context, Result};
 use crossbeam_channel::{unbounded, Receiver, Sender};
+use serde_json::Value;
 use tracing::warn;
 
 static LEVEL_WARNED: AtomicBool = AtomicBool::new(false);
@@ -71,7 +72,11 @@ pub fn read_events<R: Read>(reader: R, tx: Sender<LogEvent>) {
 
 pub fn level_adequate(text: &str) -> bool {
     text.lines().any(|line| {
-        line.contains(" I ") || line.contains(" D ") || line.contains("[I]") || line.contains("[D]")
+        journal_priority(line).is_some_and(|priority| priority >= 6)
+            || line.contains(" I ")
+            || line.contains(" D ")
+            || line.contains("[I]")
+            || line.contains("[D]")
     })
 }
 
@@ -92,6 +97,7 @@ fn warn_if_wireplumber_level_inadequate(command: &str) {
             "-n",
             "200",
             "--no-pager",
+            "--output=json",
         ])
         .output()
     else {
@@ -107,4 +113,12 @@ fn warn_if_wireplumber_level_inadequate(command: &str) {
 
 fn is_seqnum_failure(line: &str) -> bool {
     line.contains("failed to set BT_PKT_SEQNUM")
+}
+
+fn journal_priority(line: &str) -> Option<u64> {
+    let value: Value = serde_json::from_str(line).ok()?;
+    let priority = value.get("PRIORITY")?;
+    priority
+        .as_u64()
+        .or_else(|| priority.as_str()?.parse::<u64>().ok())
 }

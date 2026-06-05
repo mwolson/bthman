@@ -48,7 +48,7 @@ pub struct Cli {
     #[arg(long = "probe-stuck-sco", value_name = "BOOL", num_args = 0..=1, default_missing_value = "true")]
     pub probe_stuck_sco: Option<bool>,
 
-    /// Auto-recover confirmed stuck-SCO by disconnecting and reconnecting the device
+    /// Auto-recover confirmed stuck-SCO by disconnecting and reconnecting the device (default on)
     #[arg(long = "auto-recover-stuck-sco", value_name = "MODE")]
     pub auto_recover_stuck_sco: Option<AutoRecoverMode>,
 

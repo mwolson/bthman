@@ -6,9 +6,10 @@ Phase 1 (shipped 2026-04-23) detects stuck-SCO and logs a WARN. Phase 2 adds
 auto-remediation: when the detector confirms stuck SCO, disconnect the device at
 the BlueZ layer and reconnect it via the existing Scheduler.
 
-Default-off behind `--auto-recover-stuck-sco`. Rolls out on the author's machine
-first to gather field data on false-positive rate before considering a default
-flip.
+Originally landed default-off behind `--auto-recover-stuck-sco` and rolled out
+on the author's machine first to gather field data on false-positive rate. The
+default is now `on`; use `--auto-recover-stuck-sco=off` to keep detection
+log-only.
 
 ## Prerequisites
 
@@ -160,11 +161,13 @@ offline.
 
 ### Safeguards
 
-- **Opt-in**: default `--auto-recover-stuck-sco=off`. Env, CLI, config file.
+- **Opt-out**: default `--auto-recover-stuck-sco=on`. Use
+  `--auto-recover-stuck-sco=off` from CLI or config file to keep detection
+  log-only.
 - **Per-device rate limit**: at most one auto-recovery per device per 5 min.
   Prevents reconnect loops on genuinely broken hardware.
-- **Minimum link uptime**: skip remediation within 10 seconds of the device
-  first appearing on HFP. Prevents boot-time thrash and lets a natural app retry
+- **Minimum link uptime**: skip remediation within 3 seconds of the device first
+  appearing on HFP. Prevents boot-time thrash and lets a natural app retry
   recover from a stuck first negotiation.
 - **External recorder deference**: already exists in reconcile, keep it.
   Remediation is skipped whenever the reconcile pass is skipped.
@@ -256,10 +259,11 @@ the watcher is absent. See "Tier-2-only mode" above.
 
 After successful spawn, `LogWatcher` runs the one-time level probe described in
 "WirePlumber log level prerequisite": shells out to
-`journalctl --user -u wireplumber.service -n 200 --no-pager` and scans the
-output for any line matching `^... [ID] ` (the WirePlumber level marker). If no
-INFO/DEBUG line is found, log the one-time WARN. The probe runs synchronously
-during spawn so the daemon's startup log clearly indicates which mode it is in.
+`journalctl --user -u wireplumber.service -n 200 --no-pager --output=json` and
+scans `PRIORITY` for INFO or DEBUG journal entries. It also keeps the old text
+marker parser as a fallback for captured samples and tests. If no INFO/DEBUG
+line is found, log the one-time WARN. The probe runs synchronously during spawn
+so the daemon's startup log clearly indicates which mode it is in.
 
 Verify before merging: `journalctl -f --grep` was added in systemd v237. Debian
 bookworm ships v252, Alpine ships nothing, Arch ships current. The flag is
@@ -556,9 +560,9 @@ Notes:
   SEQNUM line produces `LogEvent::SeqnumFailure`.
 - Non-matching lines produce no events.
 - EOF / child exit ends the stream cleanly.
-- Level-probe parser: input containing at least one `... I spa.bluez5...` line
-  returns "level adequate"; input with only `... W ...` / `... E ...` lines
-  returns "level inadequate" (triggers WARN).
+- Level-probe parser: JSON input containing at least one `PRIORITY=6` (INFO) or
+  `PRIORITY=7` (DEBUG) line returns "level adequate"; WARN-only input returns
+  "level inadequate" (triggers WARN).
 - `LogWatcher::spawn()` returns Err when journalctl is missing (test by setting
   `PATH=` on the spawn command).
 
@@ -579,11 +583,11 @@ Notes:
 
 `tests/decide.rs` (table-driven matrix):
 
-- `(probe_result, seqnum_recent, prior_all_zero, uptime_lt_10s, rate_limited, profile_changed, source_now_muted) -> expected_decision`
+- `(probe_result, seqnum_recent, prior_all_zero, uptime_lt_3s, rate_limited, profile_changed, source_now_muted) -> expected_decision`
 - Cases: HasSignal clears state regardless of other inputs. Unavailable is
   LogOnly. AllZero with SEQNUM recent is Tier 1. AllZero with prior all-zero is
   Tier 2. AllZero alone is RecordAllZero + arm follow-up. AllZero with
-  rate-limit is Skip(RecentRemediation). AllZero with uptime < 10s is
+  rate-limit is Skip(RecentRemediation). AllZero with uptime < 3s is
   Skip(MinUptime). AllZero with profile changed is Skip(ProfileChanged). AllZero
   with muted is Skip(Muted).
 
@@ -636,12 +640,9 @@ Integration tests (Docker):
    toggles / codec changes.
 3. Flip to `on`. Observe for another week. Any unexpected disconnects means flip
    back to `dry-run`, diagnose.
-4. Once stable, add a README note recommending opt-in for users who see the
-   symptom. The recommendation should mention both the
-   `--auto-recover-stuck-sco=on` flag and the `WIREPLUMBER_DEBUG=I` env, and
-   note that Tier 2 still works without the env (slower).
-5. Default-on is a separate decision, gated on broader field data (multiple
-   users, multiple devices). Not part of Phase 2.
+4. Once stable, default to `on` and document `--auto-recover-stuck-sco=off` as
+   the opt-out. Keep the `WIREPLUMBER_DEBUG=I` note for faster Tier 1 detection;
+   Tier 2 still works without the env, but is slower.
 
 ## Open questions
 

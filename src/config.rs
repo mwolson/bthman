@@ -26,7 +26,7 @@ impl Default for Config {
         Self {
             preferred_profiles: vec!["headset-head-unit".into(), "headset-head-unit-msbc".into()],
             input_volume: 100,
-            auto_recover_stuck_sco: AutoRecoverMode::Off,
+            auto_recover_stuck_sco: AutoRecoverMode::On,
             broken_vendors: ["0e8d".into()].into_iter().collect(),
             debounce: Duration::from_millis(500),
             probe_stuck_sco: true,
