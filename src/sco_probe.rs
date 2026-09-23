@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::process::{Command, Stdio};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use tracing::{debug, info, warn};
@@ -13,6 +15,7 @@ pub const DEFAULT_PROBE_COOLDOWN: Duration = Duration::from_secs(20);
 pub const FOLLOW_UP_DELAY: Duration = Duration::from_secs(2);
 pub const FOLLOW_UP_WINDOW: Duration = Duration::from_secs(3);
 pub const MIN_HFP_UPTIME: Duration = Duration::from_secs(3);
+pub const PROBE_GRACE: Duration = Duration::from_secs(1);
 pub const REMEDIATION_RATE_LIMIT: Duration = Duration::from_secs(300);
 pub const SEQNUM_WINDOW: Duration = Duration::from_secs(5);
 
@@ -106,7 +109,7 @@ impl ProbeState {
         let state = self.sources.entry(source.to_string()).or_default();
         state.last_probe = Some(now);
         match result {
-            ProbeResult::AllZero => {
+            ProbeResult::AllZero | ProbeResult::NoData => {
                 state.last_all_zero = Some(now);
                 state.follow_up_due = Some(now + FOLLOW_UP_DELAY);
             }
@@ -203,7 +206,15 @@ impl ProbeState {
 pub enum ProbeResult {
     AllZero,
     HasSignal,
+    NoData,
     Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Capture {
+    Data(Vec<u8>),
+    Failed,
+    NoData,
 }
 
 fn source_from_addr(addr: &str) -> String {
@@ -211,13 +222,13 @@ fn source_from_addr(addr: &str) -> String {
 }
 
 pub trait ProbeRunner {
-    fn capture_raw(&self, source: &str, duration: Duration) -> Option<Vec<u8>>;
+    fn capture_raw(&self, source: &str, duration: Duration) -> Capture;
 }
 
 pub struct RealProbe;
 
 impl ProbeRunner for RealProbe {
-    fn capture_raw(&self, source: &str, duration: Duration) -> Option<Vec<u8>> {
+    fn capture_raw(&self, source: &str, duration: Duration) -> Capture {
         let target_bytes = bytes_for_duration(duration);
         // pacat 17.0-98 (PipeWire's pulse-compat) writes zero bytes when the
         // output path is "-"; /dev/stdout works correctly via the piped fd.
@@ -242,45 +253,71 @@ impl ProbeRunner for RealProbe {
             Ok(c) => c,
             Err(err) => {
                 debug!("parecord spawn failed: {}", err);
-                return None;
+                return Capture::Failed;
             }
         };
 
-        let mut stdout = match child.stdout.take() {
-            Some(s) => s,
-            None => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
+        let Some(stdout) = child.stdout.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Capture::Failed;
         };
 
-        let deadline = Instant::now() + duration + Duration::from_millis(500);
+        // A stuck SCO link can leave parecord blocked with no data, so reads
+        // happen on a helper thread and the deadline is enforced here.
+        let (tx, rx) = mpsc::channel();
+        let reader = thread::spawn(move || forward_chunks(stdout, tx));
+
+        let wait = duration + PROBE_GRACE;
+        let deadline = Instant::now() + wait;
         let mut buf = Vec::with_capacity(target_bytes);
-        let mut scratch = [0u8; 4096];
-        while buf.len() < target_bytes && Instant::now() < deadline {
-            match stdout.read(&mut scratch) {
-                Ok(0) => break,
-                Ok(n) => buf.extend_from_slice(&scratch[..n]),
-                Err(err) => {
-                    debug!("parecord read failed: {}", err);
+        let mut timed_out = false;
+        while buf.len() < target_bytes {
+            match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(chunk) => buf.extend_from_slice(&chunk),
+                Err(RecvTimeoutError::Timeout) => {
+                    timed_out = true;
                     break;
                 }
+                Err(RecvTimeoutError::Disconnected) => break,
             }
         }
 
         let _ = child.kill();
         let _ = child.wait();
+        let _ = reader.join();
 
+        if buf.is_empty() && timed_out {
+            debug!("parecord produced no data within {}ms", wait.as_millis());
+            return Capture::NoData;
+        }
         if buf.len() < target_bytes / 2 {
             debug!(
                 "parecord produced {} bytes (wanted {}); treating as unavailable",
                 buf.len(),
                 target_bytes
             );
-            return None;
+            return Capture::Failed;
         }
-        Some(buf)
+        Capture::Data(buf)
+    }
+}
+
+fn forward_chunks(mut stdout: impl Read, tx: mpsc::Sender<Vec<u8>>) {
+    let mut scratch = [0u8; 4096];
+    loop {
+        match stdout.read(&mut scratch) {
+            Ok(0) => break,
+            Ok(n) => {
+                if tx.send(scratch[..n].to_vec()).is_err() {
+                    break;
+                }
+            }
+            Err(err) => {
+                debug!("parecord read failed: {}", err);
+                break;
+            }
+        }
     }
 }
 
@@ -291,10 +328,11 @@ pub fn bytes_for_duration(duration: Duration) -> usize {
 }
 
 pub fn probe_source(runner: &dyn ProbeRunner, source: &str, duration: Duration) -> ProbeResult {
-    let Some(buf) = runner.capture_raw(source, duration) else {
-        return ProbeResult::Unavailable;
-    };
-    classify(&buf)
+    match runner.capture_raw(source, duration) {
+        Capture::Data(buf) => classify(&buf),
+        Capture::Failed => ProbeResult::Unavailable,
+        Capture::NoData => ProbeResult::NoData,
+    }
 }
 
 pub fn classify(buf: &[u8]) -> ProbeResult {
@@ -318,6 +356,11 @@ pub fn log_result(source: &str, result: &ProbeResult) {
         ProbeResult::HasSignal => {
             info!("Probe: {} has signal", source);
         }
+        ProbeResult::NoData => warn!(
+            "Probe: {} delivered no audio before the capture deadline (possible stuck SCO); \
+             reconnect the device to recover",
+            source
+        ),
         ProbeResult::Unavailable => {
             info!(
                 "Probe: {} unavailable (parecord missing or capture failed)",

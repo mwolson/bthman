@@ -229,7 +229,9 @@ fn handle_probe_result(
     prior_all_zero: bool,
     now: Instant,
 ) {
-    if !config.auto_recover_stuck_sco.enabled() || !matches!(result, ProbeResult::AllZero) {
+    if !config.auto_recover_stuck_sco.enabled()
+        || !matches!(result, ProbeResult::AllZero | ProbeResult::NoData)
+    {
         return;
     }
 

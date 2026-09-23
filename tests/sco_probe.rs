@@ -2,17 +2,17 @@ use std::cell::RefCell;
 use std::time::{Duration, Instant};
 
 use bthman::sco_probe::{
-    bytes_for_duration, classify, probe_source, ProbeAction, ProbeResult, ProbeRunner, ProbeState,
-    DEFAULT_PROBE_DURATION,
+    bytes_for_duration, classify, probe_source, Capture, ProbeAction, ProbeResult, ProbeRunner,
+    ProbeState, DEFAULT_PROBE_DURATION,
 };
 
 struct FakeProbe {
-    response: RefCell<Option<Option<Vec<u8>>>>,
+    response: RefCell<Option<Capture>>,
     calls: RefCell<Vec<(String, Duration)>>,
 }
 
 impl FakeProbe {
-    fn new(response: Option<Vec<u8>>) -> Self {
+    fn new(response: Capture) -> Self {
         Self {
             response: RefCell::new(Some(response)),
             calls: RefCell::new(Vec::new()),
@@ -21,9 +21,9 @@ impl FakeProbe {
 }
 
 impl ProbeRunner for FakeProbe {
-    fn capture_raw(&self, source: &str, duration: Duration) -> Option<Vec<u8>> {
+    fn capture_raw(&self, source: &str, duration: Duration) -> Capture {
         self.calls.borrow_mut().push((source.to_string(), duration));
-        self.response.borrow_mut().take().unwrap_or(None)
+        self.response.borrow_mut().take().unwrap_or(Capture::Failed)
     }
 }
 
@@ -56,7 +56,7 @@ fn classify_typical_signal_is_signal() {
 
 #[test]
 fn probe_source_returns_unavailable_when_runner_returns_none() {
-    let fake = FakeProbe::new(None);
+    let fake = FakeProbe::new(Capture::Failed);
     let result = probe_source(
         &fake,
         "bluez_input.AA:BB:CC:DD:EE:FF",
@@ -70,7 +70,7 @@ fn probe_source_returns_unavailable_when_runner_returns_none() {
 
 #[test]
 fn probe_source_flags_all_zero_buffer() {
-    let fake = FakeProbe::new(Some(vec![0u8; 16000]));
+    let fake = FakeProbe::new(Capture::Data(vec![0u8; 16000]));
     let result = probe_source(
         &fake,
         "bluez_input.AA:BB:CC:DD:EE:FF",
@@ -83,13 +83,24 @@ fn probe_source_flags_all_zero_buffer() {
 fn probe_source_flags_signal_when_any_nonzero() {
     let mut buf = vec![0u8; 16000];
     buf[9999] = 42;
-    let fake = FakeProbe::new(Some(buf));
+    let fake = FakeProbe::new(Capture::Data(buf));
     let result = probe_source(
         &fake,
         "bluez_input.AA:BB:CC:DD:EE:FF",
         DEFAULT_PROBE_DURATION,
     );
     assert_eq!(result, ProbeResult::HasSignal);
+}
+
+#[test]
+fn probe_source_flags_no_data_capture() {
+    let fake = FakeProbe::new(Capture::NoData);
+    let result = probe_source(
+        &fake,
+        "bluez_input.AA:BB:CC:DD:EE:FF",
+        DEFAULT_PROBE_DURATION,
+    );
+    assert_eq!(result, ProbeResult::NoData);
 }
 
 #[test]
@@ -182,6 +193,19 @@ fn all_zero_arms_follow_up_wakeup() {
         state.next_wakeup(t0 + Duration::from_secs(1)),
         Some(Duration::from_secs(1))
     );
+}
+
+#[test]
+fn no_data_arms_follow_up_like_all_zero() {
+    let mut state = ProbeState::new();
+    let t0 = Instant::now();
+    let source = "bluez_input.AA:BB:CC:DD:EE:FF";
+    state.record_probe(source, &ProbeResult::NoData, t0);
+    assert_eq!(
+        state.next_action(source, t0 + Duration::from_secs(2), Duration::from_secs(20)),
+        ProbeAction::FollowUpProbe
+    );
+    assert!(state.prior_all_zero_recent(source, t0 + Duration::from_secs(1)));
 }
 
 #[test]

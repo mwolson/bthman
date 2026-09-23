@@ -5,15 +5,15 @@ use std::time::Duration;
 use anyhow::Result;
 use bthman::pactl::PactlRunner;
 use bthman::probe_cmd::run_manual_probe_with;
-use bthman::sco_probe::ProbeRunner;
+use bthman::sco_probe::{Capture, ProbeRunner};
 
 struct RecordingProbe {
     calls: RefCell<Vec<String>>,
-    response: RefCell<Option<Vec<u8>>>,
+    response: RefCell<Capture>,
 }
 
 impl RecordingProbe {
-    fn new(response: Option<Vec<u8>>) -> Self {
+    fn new(response: Capture) -> Self {
         Self {
             calls: RefCell::new(Vec::new()),
             response: RefCell::new(response),
@@ -22,7 +22,7 @@ impl RecordingProbe {
 }
 
 impl ProbeRunner for RecordingProbe {
-    fn capture_raw(&self, source: &str, _duration: Duration) -> Option<Vec<u8>> {
+    fn capture_raw(&self, source: &str, _duration: Duration) -> Capture {
         self.calls.borrow_mut().push(source.to_string());
         self.response.borrow().clone()
     }
@@ -105,7 +105,7 @@ fn explicit_source_is_probed_even_with_no_recorder_present() {
         vec!["get-source-mute", "bluez_input.AA:BB:CC:DD:EE:FF"],
         "Mute: no\n",
     )]);
-    let probe = RecordingProbe::new(Some(vec![0u8; 16000]));
+    let probe = RecordingProbe::new(Capture::Data(vec![0u8; 16000]));
     run_manual_probe_with(
         &fake,
         &probe,
@@ -129,7 +129,7 @@ fn explicit_source_is_skipped_when_muted() {
         vec!["get-source-mute", "bluez_input.AA:BB:CC:DD:EE:FF"],
         "Mute: yes\n",
     )]);
-    let probe = RecordingProbe::new(Some(vec![0u8; 16000]));
+    let probe = RecordingProbe::new(Capture::Data(vec![0u8; 16000]));
     run_manual_probe_with(
         &fake,
         &probe,
@@ -169,7 +169,7 @@ Card #2
     ]);
     let mut buf = vec![0u8; 16000];
     buf[100] = 5;
-    let probe = RecordingProbe::new(Some(buf));
+    let probe = RecordingProbe::new(Capture::Data(buf));
     run_manual_probe_with(&fake, &probe, None, Duration::from_millis(500)).unwrap();
     let calls = probe.calls.borrow();
     assert!(calls.contains(&"bluez_input.AA:BB:CC:DD:EE:FF".to_string()));
@@ -186,7 +186,7 @@ fn auto_discovery_skips_non_hfp_cards() {
             "42\tbluez_card.AA_BB_CC_DD_EE_FF\tmodule\n",
         ),
     ]);
-    let probe = RecordingProbe::new(Some(vec![0u8; 16000]));
+    let probe = RecordingProbe::new(Capture::Data(vec![0u8; 16000]));
     run_manual_probe_with(&fake, &probe, None, Duration::from_millis(500)).unwrap();
     assert!(probe.calls.borrow().is_empty());
 }
@@ -197,7 +197,7 @@ fn auto_discovery_with_no_bluez_cards_is_a_noop() {
         (vec!["list", "cards"], ""),
         (vec!["list", "cards", "short"], ""),
     ]);
-    let probe = RecordingProbe::new(Some(vec![0u8; 16000]));
+    let probe = RecordingProbe::new(Capture::Data(vec![0u8; 16000]));
     run_manual_probe_with(&fake, &probe, None, Duration::from_millis(500)).unwrap();
     assert!(probe.calls.borrow().is_empty());
 }
