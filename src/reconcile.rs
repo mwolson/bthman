@@ -112,7 +112,6 @@ pub fn reconcile_with_reconnect(
         info!("No changes needed");
     }
     if config.probe_stuck_sco {
-        let force_probe = should_force_probe(trigger);
         probe_bluetooth_sources(
             runner,
             probe,
@@ -121,14 +120,26 @@ pub fn reconcile_with_reconnect(
             scheduler,
             config,
             &cards_dump,
-            force_probe,
+            trigger,
         )?;
     }
     Ok(())
 }
 
-fn should_force_probe(trigger: &str) -> bool {
-    trigger == "seqnum_failure" || trigger.contains(" on source")
+// A probe's own capture flips the source between idle and running, which emits
+// a 'change' on source event. Letting those events bypass the cooldown made the
+// daemon probe about once a second and held the card in HFP. Plain source
+// changes only bypass it while a silent capture awaits confirmation.
+fn should_force_probe(
+    trigger: &str,
+    probe_state: &ProbeState,
+    source: &str,
+    unmuted: bool,
+) -> bool {
+    unmuted
+        || trigger == "concealment_sustained"
+        || trigger.starts_with("Event 'new' on source")
+        || (trigger.contains(" on source") && probe_state.follow_up_armed(source))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -140,7 +151,7 @@ fn probe_bluetooth_sources(
     scheduler: &mut Scheduler,
     config: &Config,
     cards_dump: &str,
-    force_probe: bool,
+    trigger: &str,
 ) -> Result<()> {
     let now = Instant::now();
     let mut hfp_addrs = std::collections::HashSet::new();
@@ -160,7 +171,6 @@ fn probe_bluetooth_sources(
             log_decision(DecisionLog {
                 source: &source,
                 tier: "na",
-                seqnum_recent: probe_state.seqnum_recent(now),
                 all_zero_count: 0,
                 uptime: probe_state.hfp_uptime(&addr, now).unwrap_or(Duration::ZERO),
                 rate_limited: false,
@@ -170,10 +180,10 @@ fn probe_bluetooth_sources(
             continue;
         }
         if pactl::source_is_muted(runner, &source) {
+            probe_state.record_muted(&source);
             log_decision(DecisionLog {
                 source: &source,
                 tier: "na",
-                seqnum_recent: probe_state.seqnum_recent(now),
                 all_zero_count: 0,
                 uptime: probe_state.hfp_uptime(&addr, now).unwrap_or(Duration::ZERO),
                 rate_limited: false,
@@ -182,6 +192,8 @@ fn probe_bluetooth_sources(
             });
             continue;
         }
+        let unmuted = probe_state.take_unmuted(&source);
+        let force_probe = should_force_probe(trigger, probe_state, &source, unmuted);
         let prior_all_zero = probe_state.prior_all_zero_recent(&source, now);
         let action =
             probe_state.next_action_with_force(&source, now, DEFAULT_PROBE_COOLDOWN, force_probe);
@@ -192,7 +204,10 @@ fn probe_bluetooth_sources(
                 continue;
             }
         }
-        let result = sco_probe::probe_source(probe, &source, DEFAULT_PROBE_DURATION);
+        let result = probe_state.apply_concealment(
+            sco_probe::probe_source(probe, &source, DEFAULT_PROBE_DURATION),
+            Instant::now(),
+        );
         sco_probe::log_result(&source, &result);
         probe_state.record_probe(&source, &result, now);
         handle_probe_result(
@@ -230,20 +245,23 @@ fn handle_probe_result(
     now: Instant,
 ) {
     if !config.auto_recover_stuck_sco.enabled()
-        || !matches!(result, ProbeResult::AllZero | ProbeResult::NoData)
+        || !matches!(
+            result,
+            ProbeResult::AllZero | ProbeResult::Concealed { .. } | ProbeResult::NoData
+        )
     {
         return;
     }
 
+    let concealed = matches!(result, ProbeResult::Concealed { .. });
+
     let uptime = probe_state.hfp_uptime(addr, now).unwrap_or(Duration::ZERO);
-    let seqnum_recent = probe_state.seqnum_recent(now);
     let all_zero_count = if prior_all_zero { 2 } else { 1 };
 
     if probe_state.last_remediation_recent(addr, now) {
         log_decision(DecisionLog {
             source,
             tier: "na",
-            seqnum_recent,
             all_zero_count,
             uptime,
             rate_limited: true,
@@ -253,10 +271,12 @@ fn handle_probe_result(
         return;
     }
     if uptime < MIN_HFP_UPTIME {
+        // A link that is still starting can return no audio. Keep the
+        // follow-up probe but do not let this capture confirm a later one.
+        probe_state.discount_silent(source);
         log_decision(DecisionLog {
             source,
             tier: "na",
-            seqnum_recent,
             all_zero_count,
             uptime,
             rate_limited: false,
@@ -269,7 +289,6 @@ fn handle_probe_result(
         log_decision(DecisionLog {
             source,
             tier: "na",
-            seqnum_recent,
             all_zero_count,
             uptime,
             rate_limited: false,
@@ -282,7 +301,6 @@ fn handle_probe_result(
         log_decision(DecisionLog {
             source,
             tier: "na",
-            seqnum_recent,
             all_zero_count,
             uptime,
             rate_limited: false,
@@ -292,8 +310,11 @@ fn handle_probe_result(
         return;
     }
 
-    let tier = if seqnum_recent {
-        Some(1)
+    // WirePlumber logs "failed to set BT_PKT_SEQNUM" every time an HFP link
+    // opens on kernels without that socket option, so it cannot confirm a
+    // stuck link. There is deliberately no tier 1.
+    let tier = if prior_all_zero && concealed {
+        Some(3)
     } else if prior_all_zero {
         Some(2)
     } else {
@@ -304,7 +325,6 @@ fn handle_probe_result(
         log_decision(DecisionLog {
             source,
             tier: "na",
-            seqnum_recent: false,
             all_zero_count: 1,
             uptime,
             rate_limited: false,
@@ -322,7 +342,6 @@ fn handle_probe_result(
             addr,
             all_zero_count,
             mode: config.auto_recover_stuck_sco,
-            seqnum_recent,
             source,
             tier,
             uptime_s: uptime.as_secs(),
@@ -334,7 +353,6 @@ fn handle_probe_result(
 struct DecisionLog<'a> {
     source: &'a str,
     tier: &'a str,
-    seqnum_recent: bool,
     all_zero_count: u8,
     uptime: Duration,
     rate_limited: bool,
@@ -344,10 +362,9 @@ struct DecisionLog<'a> {
 
 fn log_decision(decision: DecisionLog<'_>) {
     info!(
-        "stuck_sco_decision: source={} tier={} seqnum_recent={} all_zero_count={} uptime_s={} rate_limited={} action={} addr={}",
+        "stuck_sco_decision: source={} tier={} all_zero_count={} uptime_s={} rate_limited={} action={} addr={}",
         decision.source,
         decision.tier,
-        decision.seqnum_recent,
         decision.all_zero_count,
         decision.uptime.as_secs(),
         decision.rate_limited,

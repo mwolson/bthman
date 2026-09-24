@@ -2,17 +2,22 @@ use std::io::{BufRead, BufReader, Read};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use serde_json::Value;
-use tracing::warn;
+use tracing::info;
 
-static LEVEL_WARNED: AtomicBool = AtomicBool::new(false);
+use crate::sco_probe::ConcealmentTracker;
+
+const CONCEALMENT_TOPIC: &str = "spa.bluez5.source.media";
+
+static CONCEALMENT_LOGGING_NOTED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LogEvent {
-    SeqnumFailure,
+    ConcealmentSustained,
 }
 
 pub struct LogWatcher {
@@ -21,12 +26,12 @@ pub struct LogWatcher {
 }
 
 impl LogWatcher {
-    pub fn spawn() -> Result<Self> {
-        spawn_with_command("journalctl")
+    pub fn spawn(tracker: ConcealmentTracker) -> Result<Self> {
+        spawn_with_command("journalctl", tracker)
     }
 
-    pub fn spawn_with_command(command: &str) -> Result<Self> {
-        spawn_with_command(command)
+    pub fn spawn_with_command(command: &str, tracker: ConcealmentTracker) -> Result<Self> {
+        spawn_with_command(command, tracker)
     }
 
     pub fn rx(&self) -> Receiver<LogEvent> {
@@ -38,8 +43,8 @@ impl LogWatcher {
     }
 }
 
-fn spawn_with_command(command: &str) -> Result<LogWatcher> {
-    warn_if_wireplumber_level_inadequate(command);
+fn spawn_with_command(command: &str, tracker: ConcealmentTracker) -> Result<LogWatcher> {
+    note_if_concealment_logging_unseen(command);
     let mut child = Command::new(command)
         .args([
             "--user",
@@ -50,7 +55,7 @@ fn spawn_with_command(command: &str) -> Result<LogWatcher> {
             "0",
             "--no-pager",
             "--grep",
-            "failed to set BT_PKT_SEQNUM",
+            "produced PLC audio",
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -58,44 +63,50 @@ fn spawn_with_command(command: &str) -> Result<LogWatcher> {
         .context("spawning journalctl wireplumber watcher")?;
     let stdout = child.stdout.take().context("journalctl stdout missing")?;
     let (tx, rx) = unbounded();
-    spawn_reader(stdout, tx)?;
+    spawn_reader(stdout, tx, tracker)?;
     Ok(LogWatcher { child, rx })
 }
 
-pub fn read_events<R: Read>(reader: R, tx: Sender<LogEvent>) {
+pub fn read_events<R: Read>(reader: R, tx: Sender<LogEvent>, tracker: &ConcealmentTracker) {
     for line in BufReader::new(reader).lines().map_while(Result::ok) {
-        if is_seqnum_failure(&line) {
-            let _ = tx.send(LogEvent::SeqnumFailure);
+        if is_concealment(&line) && tracker.record_block(Instant::now()) {
+            let _ = tx.send(LogEvent::ConcealmentSustained);
         }
     }
 }
 
-pub fn level_adequate(text: &str) -> bool {
+pub fn concealment_logging_seen(text: &str) -> bool {
     text.lines().any(|line| {
-        journal_priority(line).is_some_and(|priority| priority >= 6)
-            || line.contains(" I ")
-            || line.contains(" D ")
-            || line.contains("[I]")
-            || line.contains("[D]")
+        line.contains(&format!("D {}", CONCEALMENT_TOPIC))
+            || (line.contains(CONCEALMENT_TOPIC) && journal_priority(line) == Some(7))
     })
 }
 
-fn spawn_reader<R: Read + Send + 'static>(reader: R, tx: Sender<LogEvent>) -> Result<()> {
+fn spawn_reader<R: Read + Send + 'static>(
+    reader: R,
+    tx: Sender<LogEvent>,
+    tracker: ConcealmentTracker,
+) -> Result<()> {
     thread::Builder::new()
         .name("bthman-log-watcher".into())
-        .spawn(move || read_events(reader, tx))
+        .spawn(move || read_events(reader, tx, &tracker))
         .context("spawning log watcher reader")?;
     Ok(())
 }
 
-fn warn_if_wireplumber_level_inadequate(command: &str) {
+// The topic only logs while an HFP link is up, so a boot without a call yet
+// also lands here. That is why this is INFO rather than a warning.
+fn note_if_concealment_logging_unseen(command: &str) {
     let Ok(output) = Command::new(command)
         .args([
             "--user",
             "-u",
             "wireplumber.service",
+            "-b",
+            "--grep",
+            CONCEALMENT_TOPIC,
             "-n",
-            "200",
+            "1",
             "--no-pager",
             "--output=json",
         ])
@@ -104,15 +115,17 @@ fn warn_if_wireplumber_level_inadequate(command: &str) {
         return;
     };
     let text = String::from_utf8_lossy(&output.stdout);
-    if !level_adequate(&text) && !LEVEL_WARNED.swap(true, Ordering::Relaxed) {
-        warn!(
-            "tier_1_unreachable: WirePlumber log level appears to be WARN; set WIREPLUMBER_DEBUG=I to enable Tier 1 detection"
+    if !concealment_logging_seen(&text) && !CONCEALMENT_LOGGING_NOTED.swap(true, Ordering::Relaxed)
+    {
+        info!(
+            "concealment_unconfirmed: no {} DEBUG lines from WirePlumber this boot; concealment detection needs WIREPLUMBER_DEBUG=W,{}:D",
+            CONCEALMENT_TOPIC, CONCEALMENT_TOPIC
         );
     }
 }
 
-fn is_seqnum_failure(line: &str) -> bool {
-    line.contains("failed to set BT_PKT_SEQNUM")
+fn is_concealment(line: &str) -> bool {
+    line.contains("produced PLC audio")
 }
 
 fn journal_priority(line: &str) -> Option<u64> {

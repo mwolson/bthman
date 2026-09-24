@@ -2,8 +2,8 @@ use std::cell::RefCell;
 use std::time::{Duration, Instant};
 
 use bthman::sco_probe::{
-    bytes_for_duration, classify, probe_source, Capture, ProbeAction, ProbeResult, ProbeRunner,
-    ProbeState, DEFAULT_PROBE_DURATION,
+    bytes_for_duration, classify, probe_source, Capture, ConcealmentTracker, ProbeAction,
+    ProbeResult, ProbeRunner, ProbeState, CONCEALMENT_MIN_BLOCKS, DEFAULT_PROBE_DURATION,
 };
 
 struct FakeProbe {
@@ -209,6 +209,69 @@ fn no_data_arms_follow_up_like_all_zero() {
 }
 
 #[test]
+fn concealed_arms_follow_up_like_all_zero() {
+    let mut state = ProbeState::new();
+    let t0 = Instant::now();
+    let source = "bluez_input.AA:BB:CC:DD:EE:FF";
+    state.record_probe(source, &ProbeResult::Concealed { blocks: 60 }, t0);
+    assert_eq!(
+        state.next_action(source, t0 + Duration::from_secs(2), Duration::from_secs(20)),
+        ProbeAction::FollowUpProbe
+    );
+    assert!(state.prior_all_zero_recent(source, t0 + Duration::from_secs(1)));
+}
+
+#[test]
+fn apply_concealment_reclassifies_signal_only_when_sustained() {
+    let state = ProbeState::new();
+    let tracker = state.concealment();
+    let t0 = Instant::now();
+    for _ in 0..CONCEALMENT_MIN_BLOCKS - 1 {
+        tracker.record_block(t0);
+    }
+    assert_eq!(
+        state.apply_concealment(ProbeResult::HasSignal, t0),
+        ProbeResult::HasSignal
+    );
+    tracker.record_block(t0);
+    assert_eq!(
+        state.apply_concealment(ProbeResult::HasSignal, t0),
+        ProbeResult::Concealed {
+            blocks: CONCEALMENT_MIN_BLOCKS
+        }
+    );
+    assert_eq!(
+        state.apply_concealment(ProbeResult::AllZero, t0),
+        ProbeResult::AllZero
+    );
+    assert_eq!(
+        state.apply_concealment(ProbeResult::HasSignal, t0 + Duration::from_secs(2)),
+        ProbeResult::HasSignal
+    );
+}
+
+#[test]
+fn concealment_tracker_notifies_once_per_interval() {
+    let tracker = ConcealmentTracker::default();
+    let t0 = Instant::now();
+    let notified: Vec<bool> = (0..CONCEALMENT_MIN_BLOCKS + 5)
+        .map(|_| tracker.record_block(t0))
+        .collect();
+    assert_eq!(notified.iter().filter(|n| **n).count(), 1);
+    assert!(notified[CONCEALMENT_MIN_BLOCKS - 1]);
+
+    let later = t0 + Duration::from_millis(1500);
+    for _ in 0..CONCEALMENT_MIN_BLOCKS {
+        assert!(!tracker.record_block(later));
+    }
+    let after_interval = t0 + Duration::from_millis(2100);
+    let renotified: Vec<bool> = (0..CONCEALMENT_MIN_BLOCKS)
+        .map(|_| tracker.record_block(after_interval))
+        .collect();
+    assert!(renotified.contains(&true));
+}
+
+#[test]
 fn has_signal_clears_follow_up() {
     let mut state = ProbeState::new();
     let t0 = Instant::now();
@@ -220,12 +283,14 @@ fn has_signal_clears_follow_up() {
 }
 
 #[test]
-fn seqnum_recent_expires_after_window() {
+fn discount_silent_keeps_follow_up_but_drops_confirmation() {
     let mut state = ProbeState::new();
     let t0 = Instant::now();
-    state.record_seqnum_failure(t0);
-    assert!(state.seqnum_recent(t0 + Duration::from_secs(5)));
-    assert!(!state.seqnum_recent(t0 + Duration::from_secs(6)));
+    let source = "bluez_input.AA:BB:CC:DD:EE:FF";
+    state.record_probe(source, &ProbeResult::NoData, t0);
+    state.discount_silent(source);
+    assert!(state.follow_up_armed(source));
+    assert!(!state.prior_all_zero_recent(source, t0 + Duration::from_secs(1)));
 }
 
 #[test]

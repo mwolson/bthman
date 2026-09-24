@@ -1,12 +1,16 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Read;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use tracing::{debug, info, warn};
 
+pub const CONCEALMENT_MIN_BLOCKS: usize = 50;
+pub const CONCEALMENT_NOTIFY_INTERVAL: Duration = Duration::from_secs(2);
+pub const CONCEALMENT_WINDOW: Duration = Duration::from_secs(1);
 pub const PROBE_RATE: u32 = 16000;
 pub const PROBE_CHANNELS: u32 = 1;
 pub const PROBE_SAMPLE_BYTES: usize = 2;
@@ -17,14 +21,14 @@ pub const FOLLOW_UP_WINDOW: Duration = Duration::from_secs(3);
 pub const MIN_HFP_UPTIME: Duration = Duration::from_secs(3);
 pub const PROBE_GRACE: Duration = Duration::from_secs(1);
 pub const REMEDIATION_RATE_LIMIT: Duration = Duration::from_secs(300);
-pub const SEQNUM_WINDOW: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Default)]
 pub struct ProbeState {
+    concealment: ConcealmentTracker,
     sources: HashMap<String, SourceState>,
     devices: HashMap<String, DeviceState>,
     hfp_addrs: HashSet<String>,
-    last_seqnum_failure: Option<Instant>,
+    muted_sources: HashSet<String>,
     remediation_in_progress: HashSet<String>,
 }
 
@@ -57,6 +61,22 @@ pub enum SkipReason {
 impl ProbeState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn concealment(&self) -> ConcealmentTracker {
+        self.concealment.clone()
+    }
+
+    pub fn apply_concealment(&self, result: ProbeResult, now: Instant) -> ProbeResult {
+        if result != ProbeResult::HasSignal {
+            return result;
+        }
+        let blocks = self.concealment.recent_blocks(now);
+        if blocks >= CONCEALMENT_MIN_BLOCKS {
+            ProbeResult::Concealed { blocks }
+        } else {
+            result
+        }
     }
 
     pub fn next_action(&self, source: &str, now: Instant, cooldown: Duration) -> ProbeAction {
@@ -109,7 +129,7 @@ impl ProbeState {
         let state = self.sources.entry(source.to_string()).or_default();
         state.last_probe = Some(now);
         match result {
-            ProbeResult::AllZero | ProbeResult::NoData => {
+            ProbeResult::AllZero | ProbeResult::Concealed { .. } | ProbeResult::NoData => {
                 state.last_all_zero = Some(now);
                 state.follow_up_due = Some(now + FOLLOW_UP_DELAY);
             }
@@ -121,13 +141,24 @@ impl ProbeState {
         }
     }
 
-    pub fn record_seqnum_failure(&mut self, now: Instant) {
-        self.last_seqnum_failure = Some(now);
+    pub fn follow_up_armed(&self, source: &str) -> bool {
+        self.sources
+            .get(source)
+            .is_some_and(|state| state.follow_up_due.is_some())
     }
 
-    pub fn seqnum_recent(&self, now: Instant) -> bool {
-        self.last_seqnum_failure
-            .is_some_and(|last| now.saturating_duration_since(last) <= SEQNUM_WINDOW)
+    pub fn record_muted(&mut self, source: &str) {
+        self.muted_sources.insert(source.to_string());
+    }
+
+    pub fn take_unmuted(&mut self, source: &str) -> bool {
+        self.muted_sources.remove(source)
+    }
+
+    pub fn discount_silent(&mut self, source: &str) {
+        if let Some(state) = self.sources.get_mut(source) {
+            state.last_all_zero = None;
+        }
     }
 
     pub fn prior_all_zero_recent(&self, source: &str, now: Instant) -> bool {
@@ -202,9 +233,63 @@ impl ProbeState {
     }
 }
 
+// PipeWire fills missing HFP packets with packet loss concealment audio, so a
+// stuck LC3 or mSBC link can look like a quiet mic rather than all zeros. Each
+// concealed codec block logs one "produced PLC audio" line at DEBUG level for
+// spa.bluez5.source.media, about 133 per second when no packets arrive.
+#[derive(Debug, Clone, Default)]
+pub struct ConcealmentTracker {
+    inner: Arc<Mutex<ConcealmentWindow>>,
+}
+
+#[derive(Debug, Default)]
+struct ConcealmentWindow {
+    blocks: VecDeque<Instant>,
+    last_notified: Option<Instant>,
+}
+
+impl ConcealmentTracker {
+    pub fn record_block(&self, now: Instant) -> bool {
+        let mut window = self.lock();
+        window.blocks.push_back(now);
+        prune_blocks(&mut window.blocks, now);
+        if window.blocks.len() < CONCEALMENT_MIN_BLOCKS {
+            return false;
+        }
+        if window
+            .last_notified
+            .is_some_and(|last| now.saturating_duration_since(last) < CONCEALMENT_NOTIFY_INTERVAL)
+        {
+            return false;
+        }
+        window.last_notified = Some(now);
+        true
+    }
+
+    pub fn recent_blocks(&self, now: Instant) -> usize {
+        let mut window = self.lock();
+        prune_blocks(&mut window.blocks, now);
+        window.blocks.len()
+    }
+
+    fn lock(&self) -> MutexGuard<'_, ConcealmentWindow> {
+        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+fn prune_blocks(blocks: &mut VecDeque<Instant>, now: Instant) {
+    while blocks
+        .front()
+        .is_some_and(|seen| now.saturating_duration_since(*seen) > CONCEALMENT_WINDOW)
+    {
+        blocks.pop_front();
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProbeResult {
     AllZero,
+    Concealed { blocks: usize },
     HasSignal,
     NoData,
     Unavailable,
@@ -352,6 +437,11 @@ pub fn log_result(source: &str, result: &ProbeResult) {
             "Probe: {} producing zero-valued samples (possible stuck SCO); \
              reconnect the device to recover",
             source
+        ),
+        ProbeResult::Concealed { blocks } => warn!(
+            "Probe: {} is producing packet loss concealment audio ({} blocks in the last second, \
+             possible stuck SCO); reconnect the device to recover",
+            source, blocks
         ),
         ProbeResult::HasSignal => {
             info!("Probe: {} has signal", source);

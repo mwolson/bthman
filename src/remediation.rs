@@ -10,7 +10,6 @@ pub struct RemediationRequest<'a> {
     pub addr: &'a str,
     pub all_zero_count: u8,
     pub mode: AutoRecoverMode,
-    pub seqnum_recent: bool,
     pub source: &'a str,
     pub tier: u8,
     pub uptime_s: u64,
@@ -25,10 +24,9 @@ pub fn remediate(
 ) {
     state.record_remediation(request.addr, now);
     info!(
-        "stuck_sco_decision: source={} tier={} seqnum_recent={} all_zero_count={} uptime_s={} rate_limited=false action={} addr={}",
+        "stuck_sco_decision: source={} tier={} all_zero_count={} uptime_s={} rate_limited=false action={} addr={}",
         request.source,
         request.tier,
-        request.seqnum_recent,
         request.all_zero_count,
         request.uptime_s,
         request.mode.action(),

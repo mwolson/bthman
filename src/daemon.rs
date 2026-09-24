@@ -39,11 +39,11 @@ pub fn run_watch(mut config: Config, overrides: Overrides, sigs: Handles) -> Res
         let (mut pa_child, pa_rx) = spawn_pactl_subscribe()?;
         let (sleep_child_opt, sleep_rx) = sleep_monitor::spawn();
         let mut sleep_child_opt = sleep_child_opt;
-        let mut log_watcher_opt = match LogWatcher::spawn() {
+        let mut log_watcher_opt = match LogWatcher::spawn(probe_state.concealment()) {
             Ok(watcher) => Some(watcher),
             Err(err) => {
                 info!(
-                    "log_watcher unavailable: {:#}; running in tier-2-only mode",
+                    "log_watcher unavailable: {:#}; concealment detection disabled",
                     err
                 );
                 None
@@ -153,11 +153,10 @@ fn inner_loop(
                 }
             },
             recv(log_rx) -> msg => match msg {
-                Ok(LogEvent::SeqnumFailure) => {
-                    probe_state.record_seqnum_failure(Instant::now());
+                Ok(LogEvent::ConcealmentSustained) => {
                     if let Err(err) = reconcile::reconcile_persistent_with_reconnect(
                         config,
-                        "seqnum_failure",
+                        "concealment_sustained",
                         probe_state,
                         ops,
                         scheduler,
