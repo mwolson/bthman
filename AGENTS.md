@@ -11,6 +11,14 @@ D-Bus `PrepareForSleep` signals via `dbus-monitor`.
 
 Prefer to write plans in the `plans/` directory.
 
+## Documentation
+
+Keep `README.md` short and readable for people installing the tool. Put
+technical detail in `docs/`: `stuck-mic-recovery.md` for detection and recovery
+design, `troubleshooting.md` for diagnosis and log fields, and `development.md`
+for contributor workflow. When behavior changes, update the matching doc in the
+same change.
+
 ## Conventions
 
 - Single-binary Rust crate with a small number of focused modules.

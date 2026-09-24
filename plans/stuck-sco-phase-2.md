@@ -1,5 +1,16 @@
 # Stuck SCO Phase 2: auto-remediation
 
+## Status (2026-09-24)
+
+Tier 1 is removed. With WirePlumber logging at INFO,
+`failed to set BT_PKT_SEQNUM` turned out to appear every time an HFP link opens
+on kernels without that socket option, so it paired with startup silence and
+reconnected healthy links. Recovery now uses Tier 2, with both silent captures
+required after the 3-second HFP uptime minimum, plus Tier 3 for sustained packet
+loss concealment. The WirePlumber prerequisite is now
+`WIREPLUMBER_DEBUG=W,spa.bluez5.source.media:D`. See the README for the current
+design.
+
 ## Scope
 
 Phase 1 (shipped 2026-04-23) detects stuck-SCO and logs a WARN. Phase 2 adds

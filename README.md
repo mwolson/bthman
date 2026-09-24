@@ -17,8 +17,11 @@ Bluetooth headsets on Linux have a couple of recurring annoyances:
 3. After suspend/resume, paired audio devices often disconnect and do not come
    back on their own. You have to open a tray applet and click them.
 4. PipeWire frequently sets the mic input volume lower than configured.
+5. Some headsets, notably AirPods, can get stuck in call mode with a mic that
+   delivers nothing, while playback keeps working. Nobody on the call can hear
+   you until the headset reconnects.
 
-`bthman` runs as a service (systemd or OpenRC) and handles all four.
+`bthman` runs as a service (systemd or OpenRC) and handles all five.
 
 ## How It Works
 
@@ -33,10 +36,15 @@ Bluetooth headsets on Linux have a couple of recurring annoyances:
   `org.freedesktop.login1.PrepareForSleep`. On the suspend edge, `bthman`
   snapshots connected audio devices. On resume, it schedules reconnect attempts
   with exponential backoff (`[0.0, 0.5, 1.5, 3.5]` seconds).
+- **Stuck mic recovery.** While a headset is in call mode, `bthman` briefly
+  records from its mic. When two recordings in a row come back silent, or
+  PipeWire reports it is filling in missing audio, it disconnects and reconnects
+  the headset. See [Stuck mic recovery](docs/stuck-mic-recovery.md).
 - **External recorder deference.** If
   `wpctl settings bluetooth.autoswitch-to-headset-profile` is `false`, `bthman`
-  assumes a recorder is holding the A2DP profile on purpose and skips the
-  reconcile pass.
+  assumes another tool is managing the headset profile on purpose. It keeps
+  correcting the codec but leaves the default source, volume, and mic probes
+  alone.
 
 ## Requirements
 
@@ -45,6 +53,7 @@ Bluetooth headsets on Linux have a couple of recurring annoyances:
 - `wpctl`
 - `bluetoothctl`
 - `dbus-monitor`
+- `parecord`, for stuck mic detection (optional)
 - A Linux distribution with systemd or OpenRC (elogind for OpenRC)
 
 ## Installation
@@ -139,13 +148,8 @@ bthman probe              Probe HFP sources for stuck-SCO silence and exit
 bthman uninstall-service  Disable and remove the service (systemd or OpenRC)
 ```
 
-`bthman probe` runs the same capture-and-classify logic the daemon uses to
-detect AirPods-style stuck HFP SCO (see below), but bypasses the daemon's
-cooldown and recorder-present gating. With no arguments it discovers every bluez
-card currently on an HFP profile. Pass `--source=<name>` to probe a specific
-source, or `--duration-ms=<N>` to override the default 500 ms capture window.
-Muted sources are skipped either way (a muted mic is guaranteed to produce zero
-samples, which would read as a false positive).
+`bthman probe` checks every headset in call mode once and reports whether its
+mic looks stuck. See [Manual probe](docs/stuck-mic-recovery.md#manual-probe).
 
 ### Daemon options
 
@@ -161,38 +165,26 @@ config file, one per line.
 --probe-stuck-sco=BOOL        Enable the stuck-SCO probe (default: true).
 ```
 
-### Stuck-SCO detection
+### Stuck mic recovery
 
-After rapid HFP profile churn, some Bluetooth headsets (notably AirPods Pro)
-leave the SCO uplink in a state where the card still reports `headset-head-unit`
-active, the `bluez_input.<addr>` source still runs, but every captured sample is
-bit-exact zero. Downlink still works; the mic is silent. The only known recovery
-is to disconnect and reconnect at the BlueZ layer
-(`bluetoothctl disconnect <addr>` then `connect`).
+Recovery is on by default. To also catch stuck links that produce quiet
+synthetic noise instead of silence (common with LC3 and mSBC), let WirePlumber
+log one extra topic:
 
-When `--probe-stuck-sco=true` (the default), the daemon runs a short `parecord`
-capture after each reconcile pass whenever a bluez card is on an HFP profile and
-its source is not muted. A per-source 20s cooldown prevents rapid events from
-triggering back-to-back probes. If the capture is bit-exact zero, or if the
-source delivers no audio at all within one second past the capture window, the
-daemon logs a warning identifying the stuck source.
+```sh
+systemctl --user edit wireplumber.service
+```
 
-By default, confirmed stuck SCO triggers recovery: the daemon disconnects the
-device and schedules reconnect through the existing backoff path. Set
-`--auto-recover-stuck-sco=off` to keep detection log-only, or
-`--auto-recover-stuck-sco=dry-run` to log the remediation decision and trip the
-rate limiter without touching the Bluetooth connection. Confirmation requires
-either a silent capture (all-zero or no data) plus a recent WirePlumber
-`BT_PKT_SEQNUM` failure, or two silent captures within 3 seconds. Auto-recovery
-is not systemd-only: hosts without journald, such as OpenRC systems, use the
-two-probe confirmation path. The faster Tier 1 path requires the WirePlumber
-journal log line, which is emitted at INFO level. On systemd user services, set
-`WIREPLUMBER_DEBUG=I`; DEBUG is not required and is noisy enough to make
-unrelated audio scheduling problems harder to diagnose. Hosts without that log
-path fall back to Tier 2.
+```ini
+[Service]
+Environment=WIREPLUMBER_DEBUG=W,spa.bluez5.source.media:D
+```
 
-`parecord` is a soft dependency: if it is missing from PATH, the probe is
-disabled and a warning is logged at startup.
+Restart WirePlumber when no call is active. Use
+`--auto-recover-stuck-sco=dry-run` or `off` to watch without reconnecting.
+[Stuck mic recovery](docs/stuck-mic-recovery.md) explains how detection works,
+and [Troubleshooting](docs/troubleshooting.md) covers what to do when a call
+cannot hear you.
 
 ### Configuration file
 
@@ -222,27 +214,21 @@ cargo uninstall bthman       # or: rm ~/.local/bin/bthman
 rm -f ~/.config/bthman.conf
 ```
 
-## Development
+## Documentation
 
-The Rust toolchain is pinned via `rust-toolchain.toml`; `rustup` auto-installs
-it (with `clippy`, `rustfmt`, and `rust-analyzer`) on your first `cargo`
-invocation in the project directory.
+- [Stuck mic recovery](docs/stuck-mic-recovery.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Development](docs/development.md)
+
+## Development
 
 ```bash
 bun run test                # unit tests
-bun run test:integration    # Docker-based integration tests
-bun run test:all            # both
+bun run hooks:check         # format, lint, and test the working tree
 ```
 
-### Hooks
-
-```bash
-bun run hooks:check         # run checks against working tree
-lefthook install            # install git hooks
-```
-
-The pre-commit hook runs `cargo fmt --check`,
-`cargo clippy --all-targets -- -D warnings`, and `cargo test`.
+See [Development](docs/development.md) for the toolchain, integration tests, and
+git hooks.
 
 ## License
 
